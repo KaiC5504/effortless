@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -1155,6 +1155,8 @@ describe('judge choice (plugin settings)', () => {
       helpers: 'off',
       theme: 'violet',
       appearance: 'auto',
+      cacheStyle: 'countdown',
+      branchDetails: ['changes', 'sync'],
     })
     expect(readConfig({ swampAt: '20' })).toMatchObject({ swampAt: 20 })
     expect(readConfig({ swampAt: '33' }).swampAt).toBe(70)
@@ -2489,7 +2491,7 @@ describe('settings panel', () => {
     expect(await drawn(panel)).toContain('Smarter · medium to max · helpers')
     expect(await drawn(panel)).toContain('/session-handoff · compact alert at')
     await panel.press({ key: 'settings-card-show' })
-    await panel.press({ key: 'show-box-timer' })
+    await panel.select({ key: 'settings-cache', value: 'off' })
     await panel.press({ key: 'show-box-reason' })
     expect(await panel.find({ key: 'show-box-sounds' })).toBeUndefined()
     // The judge line starts off, so its box switches it on; the cache timer goes off. No progress, sounds or alert.
@@ -3905,6 +3907,258 @@ describe('agent panel', () => {
     files = withTouch(files, 'types/index.d.ts', true, 'a1', 2, [])
     expect(moduleLinks(files)).toEqual(['hooks>types'])
     expect(files.find(f => f.path === 'types/index.d.ts')?.by).toEqual(['a1'])
+  })
+})
+
+describe('git branch', () => {
+  const DASH = { options: { layout: 'default' } } as never
+  const start = async ($: Engine, on: On, surface: 'desktop' | 'terminal' = 'desktop') => {
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface, isInteractive: true } as never)
+  }
+  const closeSetup = async ($: Engine, band: unknown) => {
+    const guide = await $.ui.mount(band as never)
+    await guide.press({ key: 'setup-close' })
+    await guide.unmount()
+  }
+  const TERM_BAND = { plugin: 'effortless', surface: 'terminal', ...BAND, props: { ...BAND.props, bodyColumns: 120, maxRows: 14 } } as never
+
+  type Git = { where: string; status: string; worktrees?: string } | null
+  const MAIN: Git = {
+    where: 'D:/Repos/Apps/effortless\nD:/Repos/Apps/effortless/.git\nD:/Repos/Apps/effortless/.git\n',
+    status: '# branch.oid e553b18f00ddf00ddf00ddf00ddf00ddf00ddf00d\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +2 -0\n1 .M N... 100644 100644 100644 aaa aaa hooks/register.tsx\n? notes.txt\n',
+  }
+  const WORKTREE: Git = {
+    where: 'D:/Repos/Apps/effortless/.claude/worktrees/brave-otter\nD:/Repos/Apps/effortless/.git/worktrees/brave-otter\nD:/Repos/Apps/effortless/.git\n',
+    status: '# branch.oid 141b1eb0000000000000000000000000000000000\n# branch.head claude/brave-otter\n',
+    worktrees: 'worktree D:/Repos/Apps/effortless\nHEAD e553b18f00d\nbranch refs/heads/main\n\nworktree D:/Repos/Apps/effortless/.claude/worktrees/brave-otter\nHEAD 141b1eb\nbranch refs/heads/claude/brave-otter\n\n',
+  }
+  /** git as the mod runs it: rev-parse says where the checkout is, status its branch and changes, worktree list the
+   * main checkout; null is no repository, 'slow' a git that does not answer in time. */
+  function gitSays(on: On, first: Git | 'slow') {
+    const now = { git: first }
+    const ran: string[] = []
+    on('process.run', (_$, e) => {
+      ran.push(e.argv.join(' '))
+      const g = now.git
+      if (g === 'slow' && e.argv[0] === 'git') return { deny: '$.process.run(git) is still running after 5000 ms' } as never
+      if (e.argv[0] !== 'git' || !g || g === 'slow') return { value: { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git' } } as never
+      const stdout = e.argv.includes('rev-parse') ? g.where : e.argv.includes('status') ? g.status : e.argv.includes('worktree') ? (g.worktrees ?? '') : ''
+      return { value: { exitCode: 0, stdout, stderr: '' } } as never
+    })
+    return { ran, set: (git: Git | 'slow') => { now.git = git } }
+  }
+
+  /** A reply that wrote the cache for an hour, so the countdown (or the ring) starts. */
+  const warmReplies = (on: On) => on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { ...USAGE, cache_creation: { ephemeral_1h_input_tokens: 900, ephemeral_5m_input_tokens: 0 } } } as never
+  })
+
+  test('parseGitStatus reads the branch, its commit, the files changed and the upstream', () => {
+    expect(parseGitStatus(MAIN!.status)).toEqual({ branch: 'main', commit: 'e553b18', changed: 2, upstream: 'origin/main', gone: false, ahead: 2, behind: 0 })
+    expect(parseGitStatus('# branch.oid (initial)\n# branch.head main\n')).toEqual({ branch: 'main', commit: '', changed: 0, upstream: null, gone: false, ahead: 0, behind: 0 })
+    expect(parseGitStatus('# branch.oid 0123456789abcdef\r\n# branch.head (detached)\r\n').branch).toBeNull()
+    // A merged branch pruned on the remote: git names the upstream and leaves out the counts.
+    expect(parseGitStatus('# branch.head feat\n# branch.upstream origin/feat\n')).toMatchObject({ upstream: 'origin/feat', gone: true })
+  })
+
+  test('gitPlaceFrom tells the main checkout from a linked worktree, and names the repository', () => {
+    expect(gitPlaceFrom(MAIN!.where, MAIN!.status, null)).toMatchObject({ repo: 'effortless', worktree: null, mainBranch: null, branch: 'main' })
+    expect(gitPlaceFrom(WORKTREE!.where, WORKTREE!.status, WORKTREE!.worktrees!)).toMatchObject({ repo: 'effortless', worktree: 'brave-otter', mainBranch: 'main', branch: 'claude/brave-otter' })
+    // A bare repository's worktree: the repository is the bare folder, less its .git, and there is no main checkout.
+    expect(gitPlaceFrom('/srv/wt/fix\n/srv/app.git/worktrees/fix\n/srv/app.git\n', '# branch.head fix\n', 'worktree /srv/app.git\nbare\n\nworktree /srv/wt/fix\nHEAD 1\nbranch refs/heads/fix\n')).toMatchObject({ repo: 'app', worktree: 'fix', mainBranch: null })
+    // Backslashes and a trailing slash are the same folder; a detached main checkout has no branch to name.
+    expect(gitPlaceFrom('C:\\r\\x\nC:\\r\\x\\.git\nC:/r/x/.git/\n', '', null)?.worktree).toBeNull()
+    expect(gitPlaceFrom(WORKTREE!.where, '', 'worktree D:/Repos/Apps/effortless\nHEAD e553b18f00d\ndetached\n')?.mainBranch).toBeNull()
+    expect(gitPlaceFrom('', '', null)).toBeNull()
+    // git before 2.31 prints --path-format back instead of a path: no chip rather than a wrong one.
+    expect(gitPlaceFrom('--path-format=absolute\n/r/x\n.git\n.git\n', MAIN!.status, null)).toBeNull()
+  })
+
+  test('gitChip: the branch, then the details asked for, a long name cut in the middle, the hover and the terminal line', () => {
+    const place = gitPlaceFrom(MAIN!.where, MAIN!.status, null)!
+    const main = gitChip(place)
+    expect(`${main.name}${main.marks}`).toBe('main *2 ↑2')
+    expect(main.tip).toBe('Branch main · effortless · 2 files uncommitted · 2 ahead of origin/main')
+    expect(main.line).toBe('⎇ main *2 ↑2')
+    expect(gitChip({ ...place, behind: 3 }).tip).toContain('2 ahead and 3 behind origin/main')
+    expect(gitChip({ ...place, gone: true, ahead: 0 }).tip).toContain('upstream origin/main is gone')
+    // Only what is switched on shows; the hover always tells all.
+    const bare = gitChip({ ...place, behind: 1 }, [])
+    expect(`${bare.name}${bare.marks}`).toBe('main')
+    expect(bare.tip).toContain('2 files uncommitted')
+    expect(`${gitChip(place, ['changes']).name}${gitChip(place, ['changes']).marks}`).toBe('main *2')
+    expect(`${gitChip({ ...place, behind: 1 }, ['sync']).marks}`).toBe(' ↑2 ↓1')
+    expect(gitChip(place, ['repo']).name).toBe('effortless:main')
+    const wt = gitChip(gitPlaceFrom(WORKTREE!.where, WORKTREE!.status, WORKTREE!.worktrees!)!)
+    expect(`${wt.name}${wt.marks}`).toBe('claude/brave-otter')
+    expect(wt.tip).toBe('Branch claude/brave-otter · worktree brave-otter of effortless, main checkout on main · nothing to commit · no upstream')
+    expect(wt.line).toBe('⎇ claude/brave-otter · worktree of effortless')
+    const detached = gitChip({ ...gitPlaceFrom(MAIN!.where, '# branch.oid 0123456789\n# branch.head (detached)\n', null)!, changed: 1 })
+    expect(detached.name).toBe('@0123456')
+    expect(detached.tip).toBe('Detached at 0123456 · effortless · 1 file uncommitted')
+    expect(shortBranch('claude/competent-feistel-c1efc9')).toBe('claude/competent-feistel-c1efc9')
+    const cut = shortBranch('feature/a-very-long-branch-name-that-keeps-going-1234')
+    expect(cut).toHaveLength(32)
+    expect(cut).toBe('feature/a-very-l…eeps-going-1234')
+    expect(dashboardLines({ auto: true, paused: false, judging: false, effort: 'low', cacheNow: null, contextPercent: null, branch: main.line, reason: 'Haiku: a lookup', last: null }).detail)
+      .toBe('⎇ main *2 ↑2 · Haiku: a lookup')
+  })
+
+  test('readConfig: the cache as a countdown unless ring; the branch details, changes and sync unless said', () => {
+    expect(readConfig({}).cacheStyle).toBe('countdown')
+    expect(readConfig({ cacheStyle: 'ring' }).cacheStyle).toBe('ring')
+    expect(readConfig({ cacheStyle: 'sundial' }).cacheStyle).toBe('countdown')
+    expect(readConfig({}).branchDetails).toEqual(['changes', 'sync'])
+    expect(readConfig({ branchDetails: '' }).branchDetails).toEqual([])
+    expect(readConfig({ branchDetails: 'repo, changes,nonsense' }).branchDetails).toEqual(['repo', 'changes'])
+  })
+
+  test('the cache ring: a pie of the time left in 24 steps, full to empty, and quarter pies for text', () => {
+    const hour = 60 * 60_000
+    expect(cacheShare(hour, hour)).toBe(1)
+    expect(cacheShare(hour / 2, hour)).toBe(0.5)
+    // Within a step it does not move, so the band is not redrawn for it.
+    expect(cacheShare(hour / 2 - 60_000, hour)).toBe(0.5)
+    expect(cacheShare(0, hour)).toBe(0)
+    expect(cacheRingSvg(1, '#8b8b93')).toContain('<circle cx="8" cy="8" r="5" fill="#8b8b93"/>')
+    expect(cacheRingSvg(0.25, '#8b8b93')).toContain('A5 5 0 0 1 13.00 8.00Z')
+    expect(cacheRingSvg(0.75, '#8b8b93')).toContain('A5 5 0 1 1 3.00 8.00Z')
+    expect(cacheRingSvg(0, '#8b8b93')).not.toContain('<path')
+    expect([1, 0.75, 0.5, 0.25, 0.04].map(cacheGlyph).join('')).toBe('●◕◑◔○')
+    expect(dashboardLines({ auto: true, paused: false, judging: false, effort: 'low', cacheNow: 42, cacheGlyph: '◕', contextPercent: null, reason: '', last: null }).rest).toBe(' · ◕ cache')
+  })
+
+  test('desktop: the chip sits after the cache, a worktree marked in the accent, and its hover says whose worktree it is', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    gitSays(on, WORKTREE)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-branch' })).toBeDefined()
+    expect(await band.find({ key: 'dash-branch-tip' })).toBeDefined()
+    const text = await drawn(band)
+    expect(text).toContain('"children":["claude/brave-otter"]')
+    expect(text).toContain('"alt":"worktree"')
+    expect(text).toContain('worktree brave-otter of effortless, main checkout on main')
+    await band.unmount()
+  })
+
+  test('desktop: with the cache as a ring, a pie and the word, no ticking clock; repo and name only as set', { options: { layout: 'default', cacheStyle: 'ring', branchDetails: 'repo' } } as never, async ($, on) => {
+    engine(on)
+    warmReplies(on)
+    const mocked = mock.clock(on)
+    gitSays(on, MAIN)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await $.prompt.submit({ text: 'fix the bug', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-cache-ring' })).toBeDefined()
+    expect(await band.find({ key: 'dash-cache-time' })).toBeUndefined()
+    expect(await band.find({ key: 'dash-cache-tip' })).toBeDefined()
+    const text = await drawn(band)
+    expect(text).toContain('"children":["cache"]')
+    expect(text).toContain('"children":["effortless:main"]')
+    await band.unmount()
+  })
+
+  test('terminal: the branch leads the second line of the band; the ring is a quarter pie', { options: { layout: 'default', cacheStyle: 'ring' } } as never, async ($, on) => {
+    engine(on)
+    warmReplies(on)
+    const mocked = mock.clock(on)
+    gitSays(on, MAIN)
+    await start($, on, 'terminal')
+    await closeSetup($, TERM_BAND)
+    await $.prompt.submit({ text: 'fix the bug', wait: false, origin: { kind: 'composer' } })
+    await step($)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(TERM_BAND)
+    const text = await drawn(band)
+    expect(text).toContain('⎇ main *2 ↑2')
+    expect(text).toContain('● cache')
+    await band.unmount()
+  })
+
+  test('a branch switched outside the chat shows at the next read; a slow git keeps the chip; none outside a repository', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const git = gitSays(on, MAIN)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    git.set({ ...MAIN!, status: '# branch.oid e553b18f00d\n# branch.head feat/git-chip\n' })
+    await mocked.advance(15_000)
+    let band = await $.ui.mount(DESK_BAND)
+    expect(await drawn(band)).toContain('"children":["feat/git-chip"]')
+    expect(await drawn(band)).toContain('"alt":"branch"')
+    await band.unmount()
+    git.set('slow')
+    await mocked.advance(15_000)
+    band = await $.ui.mount(DESK_BAND)
+    expect(await drawn(band)).toContain('"children":["feat/git-chip"]')
+    await band.unmount()
+    git.set(null)
+    await mocked.advance(15_000)
+    band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-branch' })).toBeUndefined()
+    expect(String((await $.command.run({ command: 'effortless', args: 'debug' })).text)).toContain('git: null')
+    await band.unmount()
+  })
+
+  test('switched off in Customize, no chip shows and git is not run', { options: { layout: 'default', hide: 'reason,branch' } } as never, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const git = gitSays(on, MAIN)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-branch' })).toBeUndefined()
+    expect(git.ran.filter(c => c.includes(' status '))).toEqual([])
+    await band.unmount()
+  })
+
+  test('Customize: the cache picker sets the style or switches the timer off, and the branch details tick on and off', DASH, async ($, on) => {
+    engine(on)
+    const set: { key: string; value: unknown }[] = []
+    on('config.set', (_$, e) => {
+      set.push({ key: e.key, value: e.value })
+      return { value: e.value } as never
+    })
+    const mocked = mock.clock(on)
+    gitSays(on, MAIN)
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    const band = await $.ui.mount(DESK_BAND)
+    await band.press({ key: 'dash-settings' })
+    await band.press({ key: 'settings-card-show' })
+    expect(await band.find({ key: 'settings-cache' })).toBeDefined()
+    expect(await band.find({ key: 'show-detail-changes' })).toBeDefined()
+    await band.select({ key: 'settings-cache', value: 'ring' })
+    await band.press({ key: 'show-detail-repo' })
+    await band.press({ key: 'show-detail-sync' })
+    await band.press({ key: 'settings-save' })
+    await band.unmount()
+    expect(set).toContainEqual({ key: 'effortless.cacheStyle', value: 'ring' })
+    expect(set).toContainEqual({ key: 'effortless.branchDetails', value: 'changes,repo' })
+    // Off is the timer hidden, as the old switch did. The Settings saved card has its moment first.
+    await mocked.advance(3000)
+    const again = await $.ui.mount(DESK_BAND)
+    await again.press({ key: 'dash-settings' })
+    // Saving keeps the card that was open, so the panel opens on Customize again.
+    expect(await again.find({ key: 'settings-cache' })).toBeDefined()
+    await again.select({ key: 'settings-cache', value: 'off' })
+    expect(await again.find({ key: 'show-detail-changes' })).toBeDefined()
+    await again.press({ key: 'show-box-branch' })
+    expect(await again.find({ key: 'show-detail-changes' })).toBeUndefined()
+    await again.press({ key: 'settings-save' })
+    await again.unmount()
+    expect(set.filter(s => s.key === 'effortless.hide').at(-1)?.value).toBe('reason,timer,branch')
   })
 })
 

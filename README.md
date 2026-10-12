@@ -75,7 +75,8 @@ new version in the chat you pressed it in, with nothing to type.
 |---|---|
 | **High · Opus** | the effort Auto picked for this prompt, and the model the chat runs on. `Deciding` while the judge thinks; a switch flashes violet and fades to white |
 | **◔ 38%** | how full the chat's context is |
-| **cache 59:00** | time until the prompt cache goes cold, after which the next message pays full price to re-read the chat |
+| **cache 59:00** | time until the prompt cache goes cold, after which the next message pays full price to re-read the chat. Rather not watch it tick? Settings → Customize → Cache → **Ring** draws it as a pie that empties as the cache cools (grey, then yellow, then red), no figures; hover it for the minutes. **Off** hides it |
+| **⎇ main \*3 ↑2** | the git branch the chat runs on: `*3` for three uncommitted files, `↑` `↓` commits against its upstream. In a linked worktree the mark turns violet; hover it for whose worktree it is and which branch the main checkout is on. Settings → Customize picks what it shows after the name (changes, ahead/behind, the repo's name) or switches it off |
 | *Haiku: a refactor…* | who judged and why |
 | **Auto** | switches the judge on and off. Changing effort in the app yourself also turns Auto off at your next message, and says so: you always win |
 | **Compact** | compacts the chat. It turns into a glowing **Handoff** when Haiku says a fresh chat would pay off, with Compact as quiet text beside it. Set Settings → Handoff → Handoff button to **Always** to keep Handoff on the bar |

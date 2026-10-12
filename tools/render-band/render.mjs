@@ -47,6 +47,8 @@ const params = {
   press: (opt('press', '') || '').split(',').filter(Boolean),
   command: opt('command', '') || '',
   trace: Number(opt('trace', '0')),
+  git: opt('git', '') || '',
+  branch: opt('branch', '') || '',
   options: Object.fromEntries((opt('options', '') || '').split(',').filter(Boolean).map((kv) => kv.split('='))),
 }
 const width = Number(opt('width', '768')) // CSS px of the band slot (the composer column; 768 at a wide window)

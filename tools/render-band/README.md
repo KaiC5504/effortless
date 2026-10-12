@@ -46,6 +46,7 @@ in `render.mjs`). After an app update it either keeps working or exits and says 
 | `--effort E`, `--reason "..."`, `--model M` | medium, opus | the judge's verdict (Haiku judge); `--model haiku` puts the prompt on a cheaper model |
 | `--handoff "..."` | | the Haiku judge's reason that a fresh chat would suit now; Handoff lights up with it |
 | `--auto off`, `--fresh`, `--judging`, `--working` | | other states |
+| `--git main\|worktree`, `--branch B` | off | git answers as a main checkout or a linked worktree (two commits ahead, one untracked file), so the branch chip shows; `--branch` names the branch |
 | `--columns N` | 100 | cells across the band body (props.bodyColumns); under 80 the Compact button is hidden |
 | `--density compact\|comfortable` | compact | the Code tab's CDS density (the reference screenshots match compact) |
 | `--mode dark\|light` | dark | |

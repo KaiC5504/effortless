@@ -66,6 +66,10 @@ export type SettingsDraft = {
   /** violet (the brand), orange (Claude's) or rose (cherry blossom). */
   theme?: string
   appearance?: string
+  /** countdown (the ticking minutes and seconds) or ring (a pie that empties as the cache cools). */
+  cacheStyle?: string
+  /** Comma-separated details the branch chip shows after the name: changes, sync (ahead/behind), repo. */
+  branchDetails?: string
 }
 
 /** One step of the task the progress bar follows: a todo or a task. */
@@ -116,6 +120,28 @@ export type AgentRec = {
   cost?: number
   /** The file its current tool call is in, relative to the project root; absent between calls. */
   file?: string
+}
+
+/** Where the chat's working directory sits in git, for the branch chip beside the cache. */
+export type GitPlace = {
+  /** The repository's folder name: the main checkout's, for a linked worktree. */
+  repo: string
+  /** The branch checked out; null when HEAD is detached. */
+  branch: string | null
+  /** The commit HEAD is on, short; empty before the first commit. */
+  commit: string
+  /** The linked worktree's folder name; null in the main checkout. */
+  worktree: string | null
+  /** The branch the main checkout is on, for a linked worktree. */
+  mainBranch: string | null
+  /** Files with uncommitted changes, untracked ones included. */
+  changed: number
+  /** The branch's upstream (origin/main); null when it has none. */
+  upstream: string | null
+  /** The upstream was deleted (a merged branch, pruned): git keeps its name but counts nothing against it. */
+  gone: boolean
+  ahead: number
+  behind: number
 }
 
 /** A file this chat or its agents read or changed, for the agent panel's map. */
@@ -216,6 +242,8 @@ declare module 'claude-code' {
       agentSteps: ProgressStep[] | null
       /** The module (folder) opened in the panel's list, or null. */
       agentsModule: string | null
+      /** The git branch the chat runs on, and its worktree; null outside a repository. */
+      gitPlace: GitPlace | null
     }
   }
 }

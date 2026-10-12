@@ -24,6 +24,10 @@ type Params = {
   // --trace MS: press on the drawn band itself and log the tree after every act and every 20 ms of the clock for MS,
   // so the page can replay each redraw in time (the patched copy logs RIG-RENDER on each ui.render of the band).
   trace: number
+  // --git main|worktree: git answers as a main checkout or a linked worktree would, so the branch chip shows; --branch
+  // names the branch.
+  git: '' | 'main' | 'worktree'
+  branch: string
 }
 const P: Params = __PARAMS__
 
@@ -74,6 +78,18 @@ describe('render rig', () => {
         usage: { ...usage, cache_creation: { ephemeral_1h_input_tokens: 900, ephemeral_5m_input_tokens: 0 } },
       } as never
     })
+    if (P.git) {
+      const linked = P.git === 'worktree'
+      const top = linked ? 'C:/code/app/.claude/worktrees/brave-otter' : 'C:/code/app'
+      const branch = P.branch || (linked ? 'claude/brave-otter' : 'main')
+      on('process.run', (_$, e) => {
+        const where = `${top}\n${linked ? 'C:/code/app/.git/worktrees/brave-otter' : 'C:/code/app/.git'}\nC:/code/app/.git\n`
+        const status = `# branch.oid 141b1eb\n# branch.head ${branch}\n# branch.upstream origin/${branch}\n# branch.ab +2 -0\n? notes.txt\n`
+        const worktrees = `worktree C:/code/app\nHEAD 141b1eb\nbranch refs/heads/main\n\nworktree ${top}\nHEAD 141b1eb\nbranch refs/heads/${branch}\n`
+        const stdout = e.argv.includes('rev-parse') ? where : e.argv.includes('status') ? status : e.argv.includes('worktree') ? worktrees : ''
+        return { value: { exitCode: 0, stdout, stderr: '' } } as never
+      })
+    }
     const clock = mock.clock(on)
     on('session.usage', () => ({ value: { context: { tokens: P.percent * 10_000, window: 1_000_000, percent: P.percent } } }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)

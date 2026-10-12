@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelForkResult, Register, RenderInput } from 'claude-code'
 
-import type { AgentRec, Effort, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
+import type { AgentRec, Effort, GitPlace, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
@@ -622,7 +622,15 @@ export type JudgeConfig = {
   theme: ThemeName
   /** auto: light when Claude Code's own theme is light. dark and light fix it. */
   appearance: 'auto' | 'dark' | 'light'
+  /** countdown: the cache's minutes and seconds, ticking. ring: a pie that empties as it cools, no figures. */
+  cacheStyle: 'countdown' | 'ring'
+  /** What the branch chip shows after the name. */
+  branchDetails: BranchDetail[]
 }
+
+/** The branch chip's optional parts: uncommitted files, commits ahead and behind the upstream, the repository's name. */
+export const BRANCH_DETAILS = ['changes', 'sync', 'repo'] as const
+export type BranchDetail = (typeof BRANCH_DETAILS)[number]
 
 /** The swamp thresholds the settings offer, in percent of the context window. */
 export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
@@ -630,7 +638,7 @@ export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
 /** The parts of effortless a person can switch off: the footer's (setup) and the progress bar's (setup, settings).
  * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
  * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
+export const HIDEABLE = ['handoff', 'timer', 'branch', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
 export type Hideable = (typeof HIDEABLE)[number]
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
@@ -651,6 +659,8 @@ let config: JudgeConfig = {
   helpers: 'off',
   theme: 'violet',
   appearance: 'auto',
+  cacheStyle: 'countdown',
+  branchDetails: ['changes', 'sync'],
 }
 
 /** The settings as the engine hands them over (defaults filled in), cleaned to the shape the judge reads. */
@@ -676,6 +686,12 @@ export function readConfig(options: unknown): JudgeConfig {
     helpers: str(o.helpers) === 'on' ? 'on' : 'off',
     theme: THEMES.find(t => t === str(o.theme)) ?? 'violet',
     appearance: (['dark', 'light'] as const).find(a => a === str(o.appearance)) ?? 'auto',
+    cacheStyle: str(o.cacheStyle) === 'ring' ? 'ring' : 'countdown',
+    // An empty string saved from the panel means the branch's name alone.
+    branchDetails: (o.branchDetails === undefined ? 'changes,sync' : str(o.branchDetails))
+      .split(',')
+      .map(part => part.trim())
+      .filter((part): part is BranchDetail => (BRANCH_DETAILS as readonly string[]).includes(part)),
     // The judge's line is off until switched on; an empty string saved from the panel means everything shows.
     hide: (o.hide === undefined ? 'reason' : str(o.hide))
       .split(',')
@@ -1270,6 +1286,31 @@ export function cacheClockSvg(msLeft: number, color: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="84" height="17" viewBox="0 0 84 17"><style>text{font-size:13px;fill:${color};opacity:0;animation:f 1s step-end 1}@keyframes f{0%{opacity:1}100%{opacity:0}}</style>${frames.join('')}</svg>`
 }
 
+/** The share of the cache's lifetime left, in 24 steps: the ring is redrawn every few minutes at most and moves too
+ * slowly to watch. */
+export function cacheShare(msLeft: number, ttlMs: number): number {
+  if (msLeft <= 0) return 0
+  return Math.min(24, Math.ceil((msLeft / ttlMs) * 24)) / 24
+}
+
+/** The cache as a ring: a pie of the time left inside a faint dial. Unlike the context ring, a stroke that fills, it
+ * empties, and it has no figures: a clock ticking down the seconds is a thing to watch, and this is not. The hover
+ * still says the minutes. */
+export function cacheRingSvg(share: number, color: string): string {
+  const a = share * 2 * Math.PI
+  const pie = share >= 1
+    ? `<circle cx="8" cy="8" r="5" fill="${color}"/>`
+    : share <= 0
+      ? ''
+      : `<path d="M8 8V3A5 5 0 ${share > 0.5 ? 1 : 0} 1 ${(8 + 5 * Math.sin(a)).toFixed(2)} ${(8 - 5 * Math.cos(a)).toFixed(2)}Z" fill="${color}"/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="none" stroke="${color}" stroke-opacity=".35" stroke-width="1.2"/>${pie}</svg>`
+}
+
+/** The ring where only text draws (the terminal, the footer): the quarter pies. */
+export function cacheGlyph(share: number): string {
+  return share > 0.875 ? '●' : share > 0.625 ? '◕' : share > 0.375 ? '◑' : share > 0.125 ? '◔' : '○'
+}
+
 let cacheTtl: keyof typeof CACHE_TTL = '1h'
 let cacheExpires = 0
 /** The countdown's variables live in the module, and a reload (an update, a plugin switch) starts the module over: the
@@ -1437,8 +1478,8 @@ async function checkSwamp($: EngineInterface) {
 // Redraws still owed after a chat was opened again: the app may draw the band before it is ready for one, so the
 // session's 1 s timer asks again a few times (see redrawSoon).
 let redrawsOwed = 0
-// The countdown's minute the band was last redrawn for (see cacheClockSvg).
-let clockMinute = -1
+// The countdown's minute the band was last redrawn for (see cacheClockSvg), or the ring's step and colour.
+let clockMinute = ''
 // When the redraws were asked for: once the band has been drawn after that, none are owed any more. Each redraw
 // rebuilds the band and restarts its animations, so asking blindly 4 more times reset the cold band's spin 4 times.
 let redrawAskedAt = 0
@@ -1807,6 +1848,8 @@ const SETTING_FIELDS = {
   helpers: 'helpers',
   theme: 'theme',
   appearance: 'appearance',
+  cacheStyle: 'cacheStyle',
+  branchDetails: 'branchDetails',
 } as const
 
 async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELDS, value: string) {
@@ -1838,10 +1881,14 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
     helpers: config.helpers,
     theme: config.theme,
     appearance: config.appearance,
+    cacheStyle: config.cacheStyle,
+    branchDetails: config.branchDetails.join(','),
     [SETTING_FIELDS[field]]: value,
   }
   config = { ...readConfig(raw), typesafeKey: config.typesafeKey }
   applyTheme()
+  // The chip switched back on was not read while off: read it at the next poll rather than the next 15 s tick.
+  gitStale = true
   $.ui.invalidate('ui.render')
 }
 
@@ -2253,6 +2300,168 @@ function effortOf(v: Snap, inUse: ModelKey): Effort | undefined {
   return EFFORTS.includes(v.shownByApp as Effort) ? (v.shownByApp as Effort) : undefined
 }
 
+// The git branch beside the cache: the checkout this chat's edits land in. The desktop app can give each chat a linked
+// worktree of its own, so the chip marks one, and its hover says whose worktree it is and where the main checkout is.
+const gitPlace = atom({ plugin: 'effortless', key: 'gitPlace' } as const, null)
+// Read this often regardless, so a branch switched in another terminal shows; after a tool that may have written,
+// at the next poll once GIT_STALE_MS has passed since the last read.
+const GIT_TICK_MS = 15_000
+const GIT_STALE_MS = 3000
+const GIT_TIMEOUT_MS = 5000
+// A longer name loses its middle: the prefix (claude/, feat/) and the end both tell branches apart.
+const BRANCH_MAX = 32
+let gitBusy = false
+let gitStale = false
+let gitReadAt = 0
+let gitError = ''
+
+/** `git status --porcelain=v2 --branch`, read: the branch, its commit, the files changed and the upstream. */
+export function parseGitStatus(text: string): Omit<GitPlace, 'repo' | 'worktree' | 'mainBranch'> {
+  const place = { branch: null as string | null, commit: '', changed: 0, upstream: null as string | null, gone: false, ahead: 0, behind: 0 }
+  let counted = false
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue
+    if (!line.startsWith('# ')) {
+      place.changed++
+      continue
+    }
+    const [, key = '', value = ''] = /^# (\S+) ?(.*)$/.exec(line) ?? []
+    if (key === 'branch.head') place.branch = value === '(detached)' ? null : value
+    else if (key === 'branch.oid') place.commit = value === '(initial)' ? '' : value.slice(0, 7)
+    else if (key === 'branch.upstream') place.upstream = value
+    else if (key === 'branch.ab') {
+      counted = true
+      const ab = /^\+(\d+) -(\d+)/.exec(value)
+      if (ab) {
+        place.ahead = Number(ab[1])
+        place.behind = Number(ab[2])
+      }
+    }
+  }
+  // An upstream deleted on the remote and pruned (a merged branch) is still named, with no counts after it.
+  place.gone = place.upstream !== null && !counted
+  return place
+}
+
+const slashed = (path: string) => path.trim().replaceAll('\\', '/').replace(/\/+$/, '')
+const baseName = (path: string) => slashed(path).split('/').pop() ?? ''
+// git older than 2.31 knows no --path-format: it prints the flag back as a line of its own and exits 0.
+const absolute = (path: string) => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(path.trim())
+
+/** Where the chat is, from `git rev-parse --show-toplevel --git-dir --git-common-dir` (absolute paths), its status, and,
+ * in a linked worktree, `git worktree list --porcelain`, whose first entry is the main checkout. */
+export function gitPlaceFrom(where: string, status: string, worktrees: string | null): GitPlace | null {
+  const [top, gitDir, common] = where.trim().split(/\r?\n/)
+  if (!top || !gitDir || !common || ![top, gitDir, common].every(absolute)) return null
+  // A linked worktree has a git dir of its own under the common one; a submodule's git dir is its own common dir.
+  const linked = slashed(gitDir).toLowerCase() !== slashed(common).toLowerCase()
+  // The common dir is the main checkout's .git, or a bare repository's own folder.
+  const repo = !linked ? baseName(top) : baseName(common) === '.git' ? baseName(slashed(common).slice(0, -5)) : baseName(common).replace(/\.git$/, '')
+  // None when the main checkout is detached, or the repository is bare and has none. Its HEAD file is no guide: under
+  // the reftable format it always reads refs/heads/.invalid.
+  const main = (worktrees ?? '').split(/\r?\n\s*\r?\n/)[0] ?? ''
+  const mainBranch = linked ? (/^branch refs\/heads\/(\S+)/m.exec(main)?.[1] ?? null) : null
+  return { repo, worktree: linked ? baseName(top) : null, mainBranch, ...parseGitStatus(status) }
+}
+
+export function shortBranch(name: string, max = BRANCH_MAX): string {
+  if (name.length <= max) return name
+  const head = Math.ceil((max - 1) / 2)
+  return `${name.slice(0, head)}…${name.slice(name.length - (max - 1 - head))}`
+}
+
+/** What the chip says (the branch, then the details asked for: *3 for three uncommitted files, ↑ ↓ against the
+ * upstream, the repository before the name), the hover's sentence, which always tells all, and the terminal's line,
+ * which has no hover and so names the worktree itself. */
+export function gitChip(p: GitPlace, details: readonly BranchDetail[] = ['changes', 'sync']): { name: string; marks: string; tip: string; line: string } {
+  const name = `${details.includes('repo') ? `${p.repo}:` : ''}${p.branch ? shortBranch(p.branch) : `@${p.commit || 'none'}`}`
+  const marks = [
+    details.includes('changes') && p.changed ? ` *${p.changed}` : '',
+    details.includes('sync') && p.ahead ? ` ↑${p.ahead}` : '',
+    details.includes('sync') && p.behind ? ` ↓${p.behind}` : '',
+  ].join('')
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const sync = !p.upstream
+    ? p.branch ? 'no upstream' : ''
+    : p.gone
+      ? `upstream ${p.upstream} is gone`
+      : p.ahead && p.behind
+        ? `${p.ahead} ahead and ${p.behind} behind ${p.upstream}`
+        : p.ahead
+          ? `${p.ahead} ahead of ${p.upstream}`
+          : p.behind
+            ? `${p.behind} behind ${p.upstream}`
+            : `up to date with ${p.upstream}`
+  const tip = [
+    p.branch ? `Branch ${p.branch}` : `Detached at ${p.commit || 'no commit'}`,
+    p.worktree ? `worktree ${p.worktree} of ${p.repo}${p.mainBranch ? `, main checkout on ${p.mainBranch}` : ''}` : p.repo,
+    p.changed ? `${plural(p.changed, 'file')} uncommitted` : 'nothing to commit',
+    sync,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return { name, marks, tip, line: `⎇ ${name}${marks}${p.worktree ? ` · worktree of ${p.repo}` : ''}` }
+}
+
+/** The branch mark: a line with a branch off it. A linked worktree draws the branch's end as a square, its own copy. */
+export function branchSvg(color: string, worktree = false): string {
+  const end = worktree ? '<rect x="8.6" y="2.6" width="3.8" height="3.8" rx=".9"/>' : '<circle cx="10.5" cy="4.5" r="1.8"/>'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14"><g fill="none" stroke="${color}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" shape-rendering="geometricPrecision"><circle cx="3.5" cy="3" r="1.8"/><circle cx="3.5" cy="11" r="1.8"/><path d="M3.5 4.8V9.2M10.5 6.4C10.5 8.6 3.5 7.6 3.5 9.2"/>${end}</g></svg>`
+}
+
+async function readGit($: EngineInterface): Promise<GitPlace | null> {
+  const cwd = await $.session.cwd().catch(() => undefined)
+  // No optional locks: a status that refreshes the index would take index.lock, and a commit the chat runs at that
+  // moment would fail on it.
+  const git = (args: string[]) => $.process.run(['git', '--no-optional-locks', ...args], { ...(cwd ? { cwd } : {}), timeoutMs: GIT_TIMEOUT_MS })
+  const [where, status] = await Promise.all([
+    git(['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir']),
+    git(['status', '--porcelain=v2', '--branch']),
+  ])
+  if (where.exitCode !== 0 || status.exitCode !== 0) {
+    gitError = (where.exitCode !== 0 ? where.stderr : status.stderr).trim().split(/\r?\n/)[0]?.slice(0, 120) ?? ''
+    return null
+  }
+  gitError = ''
+  const [, gitDir, common] = where.stdout.trim().split(/\r?\n/)
+  const linked = Boolean(gitDir && common && slashed(gitDir).toLowerCase() !== slashed(common).toLowerCase())
+  const worktrees = linked ? await git(['worktree', 'list', '--porcelain']).then(r => (r.exitCode === 0 ? r.stdout : null)) : null
+  return gitPlaceFrom(where.stdout, status.stdout, worktrees)
+}
+
+/** A tool that may have written (a commit, a checkout, an edit) has the chip read again at the next poll; a read-only
+ * one (Read, Grep, a git log) leaves it. */
+function gitAfter<R extends { isReadOnly?: true }>(result: R): R {
+  if (!result.isReadOnly) gitStale = true
+  return result
+}
+
+/** Reads git again and redraws only when something the chip shows changed: every redraw restarts the band's images. */
+async function refreshGit($: EngineInterface) {
+  if (config.hide.includes('branch')) return
+  if (gitBusy) {
+    gitStale = true
+    return
+  }
+  gitBusy = true
+  gitStale = false
+  try {
+    // git that did not answer in time (a big repository, a virus scan) leaves the chip as it was: clearing it would blink
+    // it out and back, two redraws. Only git's own answer ("not a git repository") clears it.
+    const place = await readGit($).catch((error: unknown) => {
+      gitError = String(error).slice(0, 120)
+      return undefined
+    })
+    gitReadAt = await $.clock.now().catch(() => Date.now())
+    if (place === undefined || JSON.stringify(place) === JSON.stringify(await read($, gitPlace))) return
+    void proof($, `git: ${JSON.stringify(place)}${gitError ? ` (${gitError})` : ''}`)
+    await update($, gitPlace, () => place)
+    $.ui.invalidate('ui.render')
+  } finally {
+    gitBusy = false
+  }
+}
+
 // For /effortless debug: how often the app asked for the band, when, and the last error drawing it.
 // /effortless probe N: 1 a bare box, 2 the panel's frame and header only, 3 the panel without pickers or fields.
 let probeLevel = 0
@@ -2425,7 +2634,8 @@ async function terminalBand($: EngineInterface, e: RenderInput<'AbovePrompt'>, b
   )
 }
 
-/** The dashboard's two lines: the effort with the cache and the context, then the judge's reason and the last reply. */
+/** The dashboard's two lines: the effort with the cache and the context, then the git branch, the judge's reason and
+ * the last reply. */
 export function dashboardLines(d: {
   auto: boolean
   paused: boolean
@@ -2433,6 +2643,9 @@ export function dashboardLines(d: {
   effort: Effort | undefined
   cacheNow: number | null
   contextPercent: number | null
+  /** The ring's quarter pie, when the cache is drawn as a ring: shown in place of the minutes. */
+  cacheGlyph?: string | null
+  branch?: string | null
   reason: string
   last: { cost: number; ms: number } | null
 }): { head: string; what: string; rest: string; detail: string } {
@@ -2441,7 +2654,7 @@ export function dashboardLines(d: {
   const what = d.judging ? 'Deciding…' : !d.auto ? 'Off' : d.paused ? `${level} · Auto paused` : level
   const head = [
     `✦ ${what}`,
-    d.cacheNow === null ? null : `cache ${cacheLabel(d.cacheNow)}`,
+    d.cacheNow === null ? null : d.cacheGlyph ? `${d.cacheGlyph} cache` : `cache ${cacheLabel(d.cacheNow)}`,
     d.contextPercent === null ? null : `${Math.round(d.contextPercent)}% context`,
   ]
   const last = d.last ? `last reply ≈${tokens(Math.round(d.last.cost))} tokens · ${Math.max(1, Math.round(d.last.ms / 1000))}s` : null
@@ -2450,7 +2663,7 @@ export function dashboardLines(d: {
     head: shown.join(' · '),
     what,
     rest: shown.slice(1).map(part => ` · ${part}`).join(''),
-    detail: [d.reason, last].filter(Boolean).join(' · '),
+    detail: [d.branch, d.reason, last].filter(Boolean).join(' · '),
   }
 }
 
@@ -2707,8 +2920,10 @@ function startTimers($: EngineInterface, from: 'start' | 'draw') {
   // The cache countdown's clock. A timer started inside a request ends with that request, so it lives here.
   $.clock.every(CACHE_TICK_MS, () => void showCache($).catch(() => undefined))
   $.clock.every(CACHE_TICK_MS, () => void checkSwamp($).catch(() => undefined))
+  $.clock.every(GIT_TICK_MS, () => void refreshGit($).catch(() => undefined))
   // Read the usage at once too, so the context ring is there from the start rather than a tick later.
   void checkSwamp($).then(() => $.ui.invalidate('ui.render')).catch(() => undefined)
+  void refreshGit($).catch(() => undefined)
   // A written handoff is cleared and resent from here: a hook the turn waits on may not run commands.
   handoffTimer?.cancel()
   handoffTimer = $.clock.every(HANDOFF_POLL_MS, () => {
@@ -2723,10 +2938,16 @@ function startTimers($: EngineInterface, from: 'start' | 'draw') {
     }
     // Right after a start the app may not have the usage yet: ask each second until it has, so the ring shows.
     if (!lastContext || !lastContext.window) void checkSwamp($).then(() => lastContext?.window && $.ui.invalidate('ui.render')).catch(() => undefined)
+    if (gitStale && !gitBusy)
+      void $.clock.now().then(now => (now - gitReadAt >= GIT_STALE_MS ? refreshGit($) : undefined)).catch(() => undefined)
     // The dashboard's countdown ticks inside its own image; the band is redrawn once a minute to start the next one.
+    // The ring only when its pie or its colour changes, every few minutes.
     if (cacheExpires > 0 && !config.hide.includes('timer'))
       void $.clock.now().then(now => {
-        const minute = Math.floor((cacheExpires - now) / 60_000)
+        const left = cacheExpires - now
+        const minute = config.cacheStyle === 'ring'
+          ? `${cacheShare(left, CACHE_TTL[cacheTtl])} ${cacheColor(Math.ceil(left / 60_000))}`
+          : String(Math.floor(left / 60_000))
         if (now < cacheExpires + HANDOFF_POLL_MS && minute !== clockMinute) {
           clockMinute = minute
           $.ui.invalidate('ui.render')
@@ -3268,14 +3489,22 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const drawn = e.surface !== 'terminal' && 'Svg' in els
   // A cold cache is the cold band's to say; the resting bar shows the countdown only while there is one.
   const cacheShown = config.hide.includes('timer') || (v.cacheNow !== null && v.cacheNow <= 0) ? null : v.cacheNow
+  const cacheMs = cacheExpires - (await $.clock.now())
+  const ring = config.cacheStyle === 'ring' && cacheShown !== null ? cacheShare(cacheMs, CACHE_TTL[cacheTtl]) : null
+  const place = config.hide.includes('branch') ? null : await read($, gitPlace)
+  const chip = place ? gitChip(place, config.branchDetails) : null
   const { head, what, rest, detail } = dashboardLines({
     auto: v.auto,
     paused: Boolean(v.pausedNow),
     judging: Boolean(v.judging),
     effort: effortNow,
     cacheNow: drawn ? null : cacheShown,
+    cacheGlyph: ring === null ? null : cacheGlyph(ring),
     // Desktop draws the context as a ring and a figure (as the swamp band does); the terminal says it in words.
     contextPercent: e.surface === 'terminal' && lastContext && lastContext.window ? lastContext.percent : null,
+    // Desktop draws the branch as a chip after the cache; the terminal's first line is full, so it leads the second,
+    // except while Haiku advises a handoff: that needs the line's room more.
+    branch: drawn || adviceNow ? null : chip?.line,
     // A prompt on a cheaper model names it in the judge's line ("On Sonnet · Haiku: a small fix"), not beside the effort word.
     reason: adviceNow ? `Handoff would suit: ${adviceNow}` : config.hide.includes('reason') ? '' : reason,
     // The last reply's cost is left out of the bar: it was noise there. lastTurn still records it.
@@ -3428,28 +3657,51 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
             <Text color={DASH_TEXT}>{`${Math.round(lastContext.percent)}%`}</Text>
           </Box>
         ) : null}
-        {/* The tail: the cache, then the judge's reason, on one wrapping row one line high. The reason has no width of
-            its own (it only takes what is left, truncated), so it always fits the first row and goes first; the cache
-            keeps its fixed width (the ticking seconds never shift the row) and, once it no longer fits, wraps to the
-            hidden second row whole, taking the reason with it. */}
-        {Svg && (cacheShown !== null || detail) ? (
+        {/* The tail: the cache, the branch, then the judge's reason, on one wrapping row one line high. The reason has
+            no width of its own (it only takes what is left, truncated), so it always fits the first row and goes first;
+            the branch and then the cache keep their own widths (the ticking seconds never shift the row) and, once one
+            no longer fits, it wraps to the hidden second row whole, taking what follows with it. */}
+        {Svg && (cacheShown !== null || chip || detail) ? (
           <Box key="dash-tail" flexGrow={1} flexShrink={1} minWidth={0} height={1} overflow="hidden" flexDirection="row" flexWrap="wrap" marginLeft={2}>
             <Box width={0} height={1} />
-            {cacheShown !== null ? (
+            {cacheShown !== null && ring !== null ? (
+              <Box key="dash-cache-ring" flexShrink={0} flexDirection="row" gap={1} alignItems="center" hover={{ scope: 'dash-cache', backgroundColor: HOVER_BOX }}>
+                <Svg source={cacheRingSvg(ring, cacheColor(cacheShown) ?? DASH_DIM)} alt={`cache ${cacheLabel(cacheShown)} left`} width={16} height={16} />
+                <Text color={DASH_DIM}>cache</Text>
+              </Box>
+            ) : cacheShown !== null ? (
               <Box key="dash-cache-time" width={11} flexShrink={0} hover={{ scope: 'dash-cache', backgroundColor: HOVER_BOX }}>
-                <Svg source={cacheClockSvg(cacheExpires - (await $.clock.now()), cacheShown === 0 ? ICE : (cacheColor(cacheShown) ?? DASH_DIM))}
-                  alt={`cache ${cacheClock(cacheExpires - (await $.clock.now()))}`} width={84} height={17} />
+                <Svg source={cacheClockSvg(cacheMs, cacheShown === 0 ? ICE : (cacheColor(cacheShown) ?? DASH_DIM))}
+                  alt={`cache ${cacheClock(cacheMs)}`} width={84} height={17} />
               </Box>
             ) : null}
-            {detail ? (
-              // Over the reason, shown only while the ring or cache is hovered, what they mean: a hover can only
-              // reveal, so the tip is a layer on the band's colour that covers the reason.
-              <Box key="dash-detail" position="relative" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null ? 2 : 0}>
-                <Text dimColor wrap="truncate">{detail}</Text>
-                <Box key="dash-cache-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
-                  display="none" hover={{ scope: 'dash-cache', display: 'flex' }}>
-                  <Text dimColor wrap="truncate">{hoverTips(v).cache.replace(/^Prompt cache/, 'Cache')}</Text>
-                </Box>
+            {/* The branch, after the cache: grey like it, the mark in the accent in a linked worktree. Its own width
+                and no less, so when room runs out it wraps away whole, after the reason and before the cache. */}
+            {chip && place ? (
+              <Box key="dash-branch" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null ? 2 : 0}
+                hover={{ scope: 'dash-branch', backgroundColor: HOVER_BOX }}>
+                <Svg source={branchSvg(place.worktree ? ACCENT : DASH_DIM, Boolean(place.worktree))} alt={place.worktree ? 'worktree' : 'branch'} width={14} height={14} />
+                <Text color={DASH_DIM}>{`${chip.name}${chip.marks}`}</Text>
+              </Box>
+            ) : null}
+            {detail || chip || cacheShown !== null ? (
+              // Over the reason, shown only while the rings, the cache or the branch is hovered, what they mean: a hover
+              // can only reveal, so the tip is a layer on the band's colour that covers the reason. With the reason
+              // switched off (the default) the box stays, empty, to hold the tips.
+              <Box key="dash-detail" position="relative" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null || chip ? 2 : 0}>
+                {detail ? <Text dimColor wrap="truncate">{detail}</Text> : null}
+                {detail || cacheShown !== null ? (
+                  <Box key="dash-cache-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
+                    display="none" hover={{ scope: 'dash-cache', display: 'flex' }}>
+                    <Text dimColor wrap="truncate">{hoverTips(v).cache.replace(/^Prompt cache/, 'Cache')}</Text>
+                  </Box>
+                ) : null}
+                {chip ? (
+                  <Box key="dash-branch-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
+                    display="none" hover={{ scope: 'dash-branch', display: 'flex' }}>
+                    <Text dimColor wrap="truncate">{chip.tip}</Text>
+                  </Box>
+                ) : null}
               </Box>
             ) : null}
           </Box>
@@ -3995,6 +4247,8 @@ export const register: Register = (on, options) => {
           `handoff: ${await read($, handoffStage)}`,
           `last fork: ${lastFork ? `${lastFork.outcome}, ${ago(lastFork.at)}` : 'none'}`,
           `hidden: ${config.hide.join(',') || 'nothing'}`,
+          `git: ${JSON.stringify(await read($, gitPlace))}, read ${ago(gitReadAt)}${gitError ? `, ${gitError}` : ''}`,
+          `git now: ${JSON.stringify(await readGit($).catch((error: unknown) => String(error).slice(0, 120)))}`,
           `model: ${config.modelAuto === 'on' ? `cheaper when it can, now ${routed ?? 'the chat\'s'}` : 'always the chat\'s'}`,
           lastRequest
             ? `last request: app asked ${lastRequest.appModel} at ${lastRequest.appEffort ?? 'none'}, sent ${lastRequest.model} at ${lastRequest.effort ?? 'none'}${lastRequest.model === lastRequest.appModel && lastRequest.effort === lastRequest.appEffort ? ' (unchanged)' : ' (changed by effortless)'}, ${ago(lastRequest.at)}`
@@ -4289,6 +4543,11 @@ Saved to ${out}.md and .json` }
     const handoffNow = (await read($, handoffStage)) !== null
     const needsSetup = await read($, setupPending)
     const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
+    const place = config.hide.includes('branch') ? null : await read($, gitPlace)
+    const chip = place ? gitChip(place, config.branchDetails) : null
+    const cacheWords = v.cacheNow === null ? ''
+      : config.cacheStyle === 'ring' ? `${cacheGlyph(cacheShare(cacheExpires - (await $.clock.now()), CACHE_TTL[cacheTtl]))} cache`
+      : cacheLabel(v.cacheNow)
     // Save mode paints the level in the running-hot band's ember until the limit resets.
     const saving = (await read($, saveUntil)) !== null
     const label = v.judging
@@ -4366,10 +4625,11 @@ Saved to ${out}.md and .json` }
         {config.hide.includes('timer') ? null : v.cacheNow === 0 ? (
           <Text color={ICE} hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheLabel(0)}</Text>
         ) : v.cacheNow === null ? null : cacheColor(v.cacheNow) ? (
-          <Text color={cacheColor(v.cacheNow)} hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheLabel(v.cacheNow)}</Text>
+          <Text color={cacheColor(v.cacheNow)} hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheWords}</Text>
         ) : (
-          <Text dimColor hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheLabel(v.cacheNow)}</Text>
+          <Text dimColor hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheWords}</Text>
         )}
+        {chip ? <Text dimColor hover={{ scope: 'branch', backgroundColor: HOVER_BOX }}>{chip.line}</Text> : null}
       </Box>
     )
   })
@@ -4417,13 +4677,13 @@ Saved to ${out}.md and .json` }
     const touch = touchOf(e.tool, input)
     const isList = e.tool === 'TodoWrite' || e.tool === 'TaskCreate' || e.tool === 'TaskUpdate'
     const known = id !== undefined && (await read($, agentsState)).some(a => a.id === id)
-    if (!touch && !known && !(id === undefined && isList)) return next(e)
+    if (!touch && !known && !(id === undefined && isList)) return gitAfter(await next(e))
     if (known && id !== undefined) {
       const now = await $.clock.now()
       const file = touch ? (relPath(touch.path, await $.session.root()) ?? undefined) : undefined
       await agentSet($, id, a => ({ ...a, now: toolLine(e.tool, input), toolSince: now, file }))
     }
-    const result = await next(e)
+    const result = gitAfter(await next(e))
     const ok = !('deny' in result && result.deny) && !result.isError
     if (ok && touch) await fileTouched($, touch.path, touch.edited, id ?? 'main').catch(() => undefined)
     if (ok && id === undefined && isList) {
@@ -4563,6 +4823,8 @@ Saved to ${out}.md and .json` }
         helpers: draft.helpers ?? config.helpers,
         theme: draft.theme ?? config.theme,
         appearance: draft.appearance ?? config.appearance,
+        cacheStyle: draft.cacheStyle ?? config.cacheStyle,
+        branchDetails: (draft.branchDetails ?? config.branchDetails.join(',')).split(',').filter(Boolean),
       }
       // The Helpers switch slides like Auto's: the time it flipped, seen by the draw after the click.
       const helpersNow = await $.clock.now()
@@ -4574,7 +4836,8 @@ Saved to ${out}.md and .json` }
         value === undefined ? false
         : field === 'key' ? Boolean(value.trim())
         : field === 'hide' ? !sameSet(value, config.hide.join(','))
-        : value !== String(config[field as Exclude<keyof SettingsDraft, 'key' | 'hide'>] ?? ''))
+        : field === 'branchDetails' ? !sameSet(value, config.branchDetails.join(','))
+        : value !== String(config[field as Exclude<keyof SettingsDraft, 'key' | 'hide' | 'branchDetails'>] ?? ''))
       const hidden = (draft.hide ?? config.hide.join(',')).split(',').filter(Boolean)
       const judgeName = shown.judge === 'haiku' ? 'Haiku' : hasKey || shown.judge === 'jev' ? 'Haiku + Jev' : 'Haiku'
       const summaries: Record<SettingsCard, string> = {
@@ -4582,10 +4845,11 @@ Saved to ${out}.md and .json` }
         model: shown.modelAuto === 'on' ? 'Cheaper when it can' : "Always the chat's",
         judge: tested && tested.ok !== null ? `${judgeName} · ${tested.ok ? 'working' : 'failing'}` : judgeName,
         handoff: `${shown.handoffSkill ? `/${shown.handoffSkill}` : 'Built in'} · compact alert at ${shown.swampAt}%`,
-        show: `${shown.layout === 'minimal' ? 'Minimal' : 'Dashboard'} · ${2 - ['timer', 'reason'].filter(h => hidden.includes(h)).length} of 2 on`,
+        show: `${shown.layout === 'minimal' ? 'Minimal' : 'Dashboard'} · ${hidden.includes('timer') ? 'no cache' : `cache ${shown.cacheStyle === 'ring' ? 'ring' : 'timer'}`} · ${hidden.includes('branch') ? 'no branch' : 'branch'}`,
       }
-      // The cache timer, the judge's line (who picked and how sure) and the three alerts can be switched off here (an
-      // alert's ✕ only closes it for now); the rest is the mod itself. A ticked box in plain text, dim when off: lighter than a row of white buttons.
+      // The cache timer, the git branch, the judge's line (who picked and how sure) and the three alerts can be switched
+      // off here (an alert's ✕ only closes it for now); the rest is the mod itself. A ticked box in plain text, dim when
+      // off: lighter than a row of white buttons.
       const box = ([part, label]: readonly [Hideable, string]) => {
         const off = hidden.includes(part)
         const after = off ? hidden.filter(h => h !== part) : [...hidden, part]
@@ -4594,8 +4858,6 @@ Saved to ${out}.md and .json` }
             onPress={() => set('hide')(after.join(','))} />
         )
       }
-      const toggles = ([['timer', 'Cache timer'], ['reason', 'Judge line']] as const).map(box)
-      // The alerts sit in the Handoff card, next to the share of context the context alert waits for.
       const alertToggles = ([['swamp', 'Context alert'], ['hot', 'Running low alert'], ['cold', 'Cold cache alert']] as const).map(box)
       // The slider: five stops, the marker on the one in force. No animation, a click moves it.
       const track: unknown[] = []
@@ -4638,6 +4900,32 @@ Saved to ${out}.md and .json` }
       ) : (
         <Select key={p.key} label={p.label} value={p.value} options={p.options} onSelect={p.onSelect} />
       )
+      // The cache is one picker over two settings: off is the timer hidden, as before; the others are its style.
+      const pickCache = async (value: string) => {
+        const others = hidden.filter(h => h !== 'timer')
+        await set('hide')((value === 'off' ? [...others, 'timer'] : others).join(','))
+        if (value !== 'off') await set('cacheStyle')(value)
+      }
+      // The branch chip, then, while it shows, what it shows after the name: it reads as one sentence.
+      const detailBox = ([part, label]: readonly [BranchDetail, string]) => {
+        const ticked = shown.branchDetails.includes(part)
+        const after = ticked ? shown.branchDetails.filter(d => d !== part) : [...shown.branchDetails, part]
+        return (
+          <Button key={`show-detail-${part}`} plain dimColor={!ticked} label={`${ticked ? '☑' : '☐'}︎ ${label}`}
+            onPress={() => set('branchDetails')(after.join(','))} />
+        )
+      }
+      const toggles = [
+        pick({ key: 'settings-cache', label: 'Cache', value: hidden.includes('timer') ? 'off' : shown.cacheStyle,
+          options: [{ value: 'countdown', label: 'Countdown' }, { value: 'ring', label: 'Ring' }, { value: 'off', label: 'Off' }], onSelect: pickCache }),
+        <Box key="settings-branch" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="center" marginRight={2}>
+          {box(['branch', 'Git branch'])}
+          {hidden.includes('branch') ? null : <Text key="show-detail-with" dimColor>with</Text>}
+          {hidden.includes('branch') ? null : ([['changes', 'changes'], ['sync', 'ahead/behind'], ['repo', 'repo']] as const).map(detailBox)}
+        </Box>,
+        box(['reason', 'Judge line']),
+      ]
+      // The alerts sit in the Handoff card, next to the share of context the context alert waits for.
       const field = (key: string, input: unknown, width: number) => (
         <Box key={key} width={width} flexShrink={1}>
           {input}
