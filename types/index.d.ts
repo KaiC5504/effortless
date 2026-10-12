@@ -144,6 +144,28 @@ export type GitPlace = {
   behind: number
 }
 
+/** The newest GitHub Actions run on the chat's branch, for the chip after the branch. */
+export type CiRun = {
+  id: number
+  workflow: string
+  /** The run's title: the commit message or the PR's. */
+  title: string
+  url: string
+  status: string
+  /** success, failure, cancelled, skipped...; null until it completes. */
+  conclusion: string | null
+  /** The job running now, or the one that failed; null when none is. */
+  job: string | null
+  /** The step running now, or the one that failed. */
+  step: string | null
+  /** Steps finished and steps in all, of that job. */
+  done: number
+  total: number
+  jobsDone: number
+  jobsTotal: number
+  createdAt: string
+}
+
 /** A file this chat or its agents read or changed, for the agent panel's map. */
 export type FileTouch = {
   /** Relative to the project root, with forward slashes. */
@@ -244,6 +266,8 @@ declare module 'claude-code' {
       agentsModule: string | null
       /** The git branch the chat runs on, and its worktree; null outside a repository. */
       gitPlace: GitPlace | null
+      /** The newest Actions run on the branch; null when there is none, or no gh to ask. */
+      ciRun: CiRun | null
     }
   }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph, pickRun, ciFrom, ciChip, ciTone, ciSvg } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -4110,7 +4110,7 @@ describe('git branch', () => {
     await band.unmount()
   })
 
-  test('switched off in Customize, no chip shows and git is not run', { options: { layout: 'default', hide: 'reason,branch' } } as never, async ($, on) => {
+  test('with the branch and Actions both switched off, no chip shows and git is not run', { options: { layout: 'default', hide: 'reason,branch,actions' } } as never, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
     const git = gitSays(on, MAIN)
@@ -4159,6 +4159,131 @@ describe('git branch', () => {
     await again.press({ key: 'settings-save' })
     await again.unmount()
     expect(set.filter(s => s.key === 'effortless.hide').at(-1)?.value).toBe('reason,timer,branch')
+  })
+
+  const RUN = { databaseId: 7, status: 'in_progress', conclusion: null, workflowName: 'CI', displayTitle: 'Add the ring', url: 'https://github.com/o/r/actions/runs/7', createdAt: '2026-10-13T10:00:00Z' }
+  const STEPS = ['Set up job', 'Checkout', 'Install', 'Build', 'Run tests', 'Complete job']
+  const jobAt = (at: number, failedAt?: number) => ({
+    name: 'test',
+    status: failedAt === undefined ? 'in_progress' : 'completed',
+    conclusion: failedAt === undefined ? null : 'failure',
+    steps: STEPS.map((name, i) => ({
+      name,
+      status: i < at || failedAt !== undefined ? 'completed' : i === at ? 'in_progress' : 'queued',
+      conclusion: i < at ? 'success' : i === failedAt ? 'failure' : failedAt !== undefined ? 'skipped' : null,
+    })),
+  })
+
+  test('Actions: the run still going is picked, its job and step read, and the chip says step n/m', () => {
+    const done = { ...RUN, databaseId: 6, status: 'completed', conclusion: 'success' }
+    expect(pickRun([done, RUN])?.databaseId).toBe(7)
+    expect(pickRun([done])?.databaseId).toBe(6)
+    expect(pickRun([])).toBeUndefined()
+    const now = Date.parse('2026-10-13T10:03:00Z')
+    const running = ciFrom(RUN, [{ name: 'lint', status: 'completed', conclusion: 'success', steps: [] }, jobAt(4)])
+    expect(running).toMatchObject({ job: 'test', step: 'Run tests', done: 4, total: 6, jobsDone: 1, jobsTotal: 2 })
+    expect(ciTone(running)).toBe('running')
+    const chip = ciChip(running, now)
+    expect(chip.label).toBe('CI · Run tests 4/6')
+    expect(chip.line).toBe('▶ CI · Run tests 4/6')
+    expect(chip.tip).toBe('CI running test: Run tests, step 5 of 6 · 1 of 2 jobs done · "Add the ring" · started 3m ago')
+    const failed = ciFrom({ ...RUN, status: 'completed', conclusion: 'failure' }, [jobAt(3, 3)])
+    expect(ciChip(failed, now).label).toBe('CI · Build')
+    expect(ciChip(failed, now).line).toBe('✗ CI · Build')
+    expect(ciChip(failed, now).tip).toContain('CI failed in test: Build')
+    const passed = ciFrom({ ...RUN, status: 'completed', conclusion: 'success' }, [])
+    expect([ciChip(passed, now).label, ciTone(passed)]).toEqual(['CI', 'success'])
+    expect(ciChip(ciFrom({ ...RUN, status: 'queued' }, []), now).label).toBe('CI · queued')
+    expect(ciChip({ ...running, step: 'A step with a very long name that goes on' }, now).label).toBe('CI · A step with a very long… 4/6')
+    expect(ciSvg(running, '#e0a33a')).toContain('stroke-dasharray')
+    expect(ciSvg(failed, '#e5534b')).toContain('M5 5 9 9')
+  })
+
+  /** git on main, and gh answering for the runs on it; a gh that fails stands for one not installed or logged in. */
+  function ghSays(on: On, runs: unknown[] | 'broken', jobs: unknown[] = []) {
+    const now = { runs, jobs }
+    const ran: string[] = []
+    on('process.run', (_$, e) => {
+      ran.push(e.argv.join(' '))
+      if (e.argv[0] === 'gh') {
+        if (now.runs === 'broken') return { value: { exitCode: 4, stdout: '', stderr: 'To get started with GitHub CLI, please run:  gh auth login' } } as never
+        const stdout = e.argv.includes('list') ? JSON.stringify(now.runs) : e.argv.includes('view') ? JSON.stringify({ jobs: now.jobs }) : ''
+        return { value: { exitCode: 0, stdout, stderr: '' } } as never
+      }
+      if (e.argv[0] !== 'git') return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
+      return { value: { exitCode: 0, stdout: e.argv.includes('rev-parse') ? MAIN!.where : e.argv.includes('status') ? MAIN!.status : '', stderr: '' } } as never
+    })
+    return { ran, set: (r: unknown[] | 'broken', j: unknown[] = []) => { now.runs = r; now.jobs = j } }
+  }
+
+  test('desktop: the run on the branch shows after it, moves on with its steps, and ends in a tick', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const gh = ghSays(on, [RUN], [jobAt(2)])
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    let band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-ci' })).toBeDefined()
+    expect(await band.find({ key: 'dash-ci-tip' })).toBeDefined()
+    expect(await drawn(band)).toContain('"children":["CI · Install 2/6"]')
+    expect(gh.ran.some(c => c.startsWith('gh run list --branch main'))).toBe(true)
+    await band.unmount()
+    // While it runs it is asked every 10 s.
+    gh.set([RUN], [jobAt(4)])
+    await mocked.advance(11_000)
+    band = await $.ui.mount(DESK_BAND)
+    expect(await drawn(band)).toContain('"children":["CI · Run tests 4/6"]')
+    await band.unmount()
+    gh.set([{ ...RUN, status: 'completed', conclusion: 'success' }])
+    await mocked.advance(11_000)
+    band = await $.ui.mount(DESK_BAND)
+    expect(await drawn(band)).toContain('"children":["CI"]')
+    expect(await drawn(band)).toContain('"alt":"actions success"')
+    await band.unmount()
+  })
+
+  test('terminal: the run follows the branch on the second line', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    ghSays(on, [RUN], [jobAt(4)])
+    await start($, on, 'terminal')
+    await closeSetup($, TERM_BAND)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(TERM_BAND)
+    expect(await drawn(band)).toContain('⎇ main *2 ↑2 · ▶ CI · Run tests 4/6')
+    await band.unmount()
+  })
+
+  test('without gh (or its login) no Actions chip shows, and gh is not asked again for minutes', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const gh = ghSays(on, 'broken')
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    const asked = gh.ran.filter(c => c.startsWith('gh ')).length
+    expect(asked).toBeGreaterThan(0)
+    await mocked.advance(120_000)
+    expect(gh.ran.filter(c => c.startsWith('gh ')).length).toBe(asked)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-ci' })).toBeUndefined()
+    expect(String((await $.command.run({ command: 'effortless', args: 'debug' })).text)).toContain('gh auth login')
+    await band.unmount()
+  })
+
+  test('switched off in Customize, no Actions chip and gh is never run', { options: { layout: 'default', hide: 'reason,actions' } } as never, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const gh = ghSays(on, [RUN], [jobAt(2)])
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(30_000)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-ci' })).toBeUndefined()
+    expect(await band.find({ key: 'dash-branch' })).toBeDefined()
+    expect(gh.ran.filter(c => c.startsWith('gh '))).toEqual([])
+    await band.unmount()
   })
 })
 

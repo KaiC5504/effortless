@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, ModelForkResult, Register, RenderInput } from 'claude-code'
 
-import type { AgentRec, Effort, GitPlace, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
+import type { AgentRec, CiRun, Effort, GitPlace, HandoffAfter, HandoffChoice, ModelKey, Pick, SettingsDraft, Spent } from '../types'
 import { agentsPane, demoAgents, demoFiles, demoSteps, importsOf, relPath, toolLine, touchOf, withTouch, withWaits } from './agents'
 import { ART_COLUMNS, ART_FRAME_MS, ART_MIN_WIDTH, ART_ROWS, type ArtKind, artFrame, MOVING } from './art'
 import { MARK_SVG } from './brand-mark'
@@ -638,7 +638,7 @@ export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
 /** The parts of effortless a person can switch off: the footer's (setup) and the progress bar's (setup, settings).
  * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
  * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'branch', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
+export const HIDEABLE = ['handoff', 'timer', 'branch', 'actions', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
 export type Hideable = (typeof HIDEABLE)[number]
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
@@ -1887,8 +1887,9 @@ async function saveSetting($: EngineInterface, field: keyof typeof SETTING_FIELD
   }
   config = { ...readConfig(raw), typesafeKey: config.typesafeKey }
   applyTheme()
-  // The chip switched back on was not read while off: read it at the next poll rather than the next 15 s tick.
+  // The chips switched back on were not read while off: read them at the next poll rather than the next tick.
   gitStale = true
+  ciNextAt = 0
   $.ui.invalidate('ui.render')
 }
 
@@ -2438,7 +2439,8 @@ function gitAfter<R extends { isReadOnly?: true }>(result: R): R {
 
 /** Reads git again and redraws only when something the chip shows changed: every redraw restarts the band's images. */
 async function refreshGit($: EngineInterface) {
-  if (config.hide.includes('branch')) return
+  // The Actions chip asks for runs on this branch, so git is read for it too.
+  if (config.hide.includes('branch') && config.hide.includes('actions')) return
   if (gitBusy) {
     gitStale = true
     return
@@ -2455,10 +2457,170 @@ async function refreshGit($: EngineInterface) {
     gitReadAt = await $.clock.now().catch(() => Date.now())
     if (place === undefined || JSON.stringify(place) === JSON.stringify(await read($, gitPlace))) return
     void proof($, `git: ${JSON.stringify(place)}${gitError ? ` (${gitError})` : ''}`)
+    const was = await read($, gitPlace)
     await update($, gitPlace, () => place)
+    // Another branch has other runs: ask at once rather than at the next minute.
+    if (place?.branch !== was?.branch) ciNextAt = 0
     $.ui.invalidate('ui.render')
   } finally {
     gitBusy = false
+  }
+}
+
+// The newest GitHub Actions run on the chat's branch, after the branch chip: while it runs, the step it is on and how
+// far through its job; once done, a tick or a cross. Asked of gh, the person's own GitHub CLI and login.
+const ciRun = atom({ plugin: 'effortless', key: 'ciRun' } as const, null)
+// gh calls GitHub's API: often while a run goes, seldom while nothing does, rarely where gh or a GitHub remote is
+// missing (the answer would not change). Right after a push the new run takes a few seconds to appear, so for a
+// while after one it is asked as often as during a run.
+const CI_RUNNING_MS = 10_000
+const CI_IDLE_MS = 60_000
+const CI_BROKEN_MS = 5 * 60_000
+const CI_AFTER_PUSH_MS = 2 * 60_000
+const STEP_MAX = 24
+let ciBusy = false
+let ciNextAt = 0
+let ciFastUntil = 0
+let ciError = ''
+
+type GhRun = { databaseId: number; status: string; conclusion: string | null; workflowName: string; displayTitle: string; url: string; createdAt: string }
+type GhStep = { name: string; status: string; conclusion: string | null }
+type GhJob = { name: string; status: string; conclusion: string | null; steps?: GhStep[] }
+
+/** The run to show from `gh run list` (newest first): one still going before any finished one. */
+export function pickRun(runs: readonly GhRun[]): GhRun | undefined {
+  return runs.find(r => r.status !== 'completed') ?? runs[0]
+}
+
+/** A run and its jobs from `gh run view --json jobs`, cut to what the chip says: the job running now (or the first that
+ * failed), its step, and how far through its steps it is. */
+export function ciFrom(run: GhRun, jobs: readonly GhJob[]): CiRun {
+  const failed = (c: string | null) => c === 'failure' || c === 'timed_out' || c === 'startup_failure'
+  const job = jobs.find(j => j.status === 'in_progress') ?? jobs.find(j => failed(j.conclusion)) ?? null
+  const steps = job?.steps ?? []
+  const step = steps.find(s => s.status === 'in_progress') ?? steps.find(s => failed(s.conclusion)) ?? null
+  return {
+    id: run.databaseId,
+    workflow: run.workflowName,
+    title: run.displayTitle,
+    url: run.url,
+    status: run.status,
+    conclusion: run.status === 'completed' ? run.conclusion : null,
+    job: job?.name ?? null,
+    step: step?.name ?? null,
+    done: steps.filter(s => s.status === 'completed').length,
+    total: steps.length,
+    jobsDone: jobs.filter(j => j.status === 'completed').length,
+    jobsTotal: jobs.length,
+    createdAt: run.createdAt,
+  }
+}
+
+export type CiTone = 'running' | 'queued' | 'success' | 'failure' | 'other'
+export function ciTone(c: CiRun): CiTone {
+  if (c.status === 'queued' || c.status === 'waiting' || c.status === 'pending' || c.status === 'requested') return 'queued'
+  if (c.status !== 'completed') return 'running'
+  if (c.conclusion === 'success') return 'success'
+  if (c.conclusion === 'failure' || c.conclusion === 'timed_out' || c.conclusion === 'startup_failure') return 'failure'
+  return 'other'
+}
+
+const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
+
+/** What the chip says (the workflow, then the step and n/m while it runs, or the step that failed), the hover's
+ * sentence, and the terminal's words, which have no icon and so carry a mark. */
+export function ciChip(c: CiRun, now: number): { label: string; tip: string; line: string } {
+  const tone = ciTone(c)
+  const count = c.total ? ` ${c.done}/${c.total}` : ''
+  const label =
+    tone === 'running' ? `${c.workflow}${c.step ? ` · ${cut(c.step, STEP_MAX)}` : ''}${count}`
+    : tone === 'queued' ? `${c.workflow} · queued`
+    : tone === 'failure' && c.step ? `${c.workflow} · ${cut(c.step, STEP_MAX)}`
+    : c.workflow
+  const mins = Math.max(0, Math.round((now - Date.parse(c.createdAt)) / 60_000))
+  const ago = Number.isNaN(mins) ? '' : mins < 1 ? 'started just now' : mins < 60 ? `started ${mins}m ago` : `started ${Math.round(mins / 60)}h ago`
+  const state =
+    tone === 'running' ? `running${c.job ? ` ${c.job}` : ''}${c.step ? `: ${c.step}, step ${c.done + 1} of ${c.total}` : ''}`
+    : tone === 'queued' ? 'queued'
+    : tone === 'failure' ? `failed${c.job ? ` in ${c.job}` : ''}${c.step ? `: ${c.step}` : ''}`
+    : c.conclusion ?? c.status
+  const tip = [
+    `${c.workflow} ${state}`,
+    c.jobsTotal > 1 ? `${c.jobsDone} of ${c.jobsTotal} jobs done` : '',
+    `"${cut(c.title, 60)}"`,
+    ago,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  const mark = { running: '▶', queued: '◷', success: '✓', failure: '✗', other: '⊘' }[tone]
+  return { label, tip, line: `${mark} ${label}` }
+}
+
+/** The run's mark: a ring that fills with the job's steps while it runs, a tick, a cross, a hollow ring while queued. */
+export function ciSvg(c: CiRun, color: string): string {
+  const tone = ciTone(c)
+  const head = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">'
+  const rim = `<circle cx="7" cy="7" r="5.6" fill="none" stroke="${color}" stroke-width="1.4" stroke-opacity="${tone === 'running' ? 0.3 : 1}"/>`
+  if (tone === 'running') {
+    const c2 = 2 * Math.PI * 5.6
+    const share = c.total ? Math.max(0.08, c.done / c.total) : 0.25
+    return `${head}${rim}<circle cx="7" cy="7" r="5.6" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round" stroke-dasharray="${(c2 * share).toFixed(2)} ${c2.toFixed(2)}" transform="rotate(-90 7 7)"/></svg>`
+  }
+  const g = `<g fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">`
+  if (tone === 'success') return `${head}${rim}${g}<path d="M4.6 7.2 6.3 8.9 9.5 5.4"/></g></svg>`
+  if (tone === 'failure') return `${head}${rim}${g}<path d="M5 5 9 9M9 5 5 9"/></g></svg>`
+  if (tone === 'queued') return `${head}${rim.replace('stroke-opacity="1"', 'stroke-opacity="1" stroke-dasharray="2 2"')}</svg>`
+  return `${head}${rim}${g}<path d="M4.4 9.6 9.6 4.4"/></g></svg>`
+}
+
+const CI_COLORS: Record<CiTone, string> = { running: YELLOW, queued: DASH_DIM, success: '#57c27d', failure: RED, other: DASH_DIM }
+
+/** A push, or a run started by hand, has the chip asked often for a while: its run is about to appear. */
+async function ciAfter($: EngineInterface, tool: string, input: unknown) {
+  const command = String((input as { command?: unknown }).command ?? '')
+  if ((tool === 'Bash' || tool === 'PowerShell') && /\bgit\s+push\b|\bgh\s+(workflow\s+run|run\s+rerun|pr\s+(create|merge))\b/.test(command)) {
+    const now = await $.clock.now().catch(() => Date.now())
+    ciFastUntil = now + CI_AFTER_PUSH_MS
+    ciNextAt = now + 3000
+  }
+}
+
+async function readCi($: EngineInterface, branch: string): Promise<CiRun | null> {
+  const cwd = await $.session.cwd().catch(() => undefined)
+  const gh = (args: string[]) => $.process.run(['gh', ...args], { ...(cwd ? { cwd } : {}), timeoutMs: 15_000 })
+  const list = await gh(['run', 'list', '--branch', branch, '--limit', '5', '--json', 'databaseId,status,conclusion,workflowName,displayTitle,url,createdAt'])
+  if (list.exitCode !== 0) throw new Error(list.stderr.trim().split(/\r?\n/)[0]?.slice(0, 120) || `gh exited ${list.exitCode}`)
+  const run = pickRun(JSON.parse(list.stdout || '[]') as GhRun[])
+  if (!run) return null
+  // A finished run that passed needs no jobs; a failed one is read once more for the step that failed.
+  const was = await read($, ciRun)
+  if (run.status === 'completed' && (run.conclusion === 'success' || (was?.id === run.databaseId && was.status === 'completed')))
+    return was?.id === run.databaseId && was.status === 'completed' ? was : ciFrom(run, [])
+  const view = await gh(['run', 'view', String(run.databaseId), '--json', 'jobs'])
+  const jobs = view.exitCode === 0 ? ((JSON.parse(view.stdout || '{}') as { jobs?: GhJob[] }).jobs ?? []) : []
+  return ciFrom(run, jobs)
+}
+
+async function refreshCi($: EngineInterface) {
+  if (config.hide.includes('actions') || ciBusy) return
+  const branch = (await read($, gitPlace))?.branch
+  const now = await $.clock.now().catch(() => Date.now())
+  ciBusy = true
+  try {
+    const next = branch ? await readCi($, branch).then(r => ((ciError = ''), r)) : null
+    const running = next !== null && next.status !== 'completed'
+    ciNextAt = now + (running || now < ciFastUntil ? CI_RUNNING_MS : CI_IDLE_MS)
+    if (JSON.stringify(next) === JSON.stringify(await read($, ciRun))) return
+    void proof($, `actions: ${JSON.stringify(next)}`)
+    await update($, ciRun, () => next)
+    $.ui.invalidate('ui.render')
+  } catch (error) {
+    // No gh, no login, no GitHub remote: nothing to show, and asking again soon would not change that. The last answer
+    // stays meanwhile, as the branch chip's does when git is slow.
+    ciError = String(error instanceof Error ? error.message : error).slice(0, 120)
+    ciNextAt = now + CI_BROKEN_MS
+  } finally {
+    ciBusy = false
   }
 }
 
@@ -2940,6 +3102,8 @@ function startTimers($: EngineInterface, from: 'start' | 'draw') {
     if (!lastContext || !lastContext.window) void checkSwamp($).then(() => lastContext?.window && $.ui.invalidate('ui.render')).catch(() => undefined)
     if (gitStale && !gitBusy)
       void $.clock.now().then(now => (now - gitReadAt >= GIT_STALE_MS ? refreshGit($) : undefined)).catch(() => undefined)
+    if (!config.hide.includes('actions') && !ciBusy)
+      void $.clock.now().then(now => (now >= ciNextAt ? refreshCi($) : undefined)).catch(() => undefined)
     // The dashboard's countdown ticks inside its own image; the band is redrawn once a minute to start the next one.
     // The ring only when its pie or its colour changes, every few minutes.
     if (cacheExpires > 0 && !config.hide.includes('timer'))
@@ -3496,6 +3660,8 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const ring = config.cacheStyle === 'ring' && cacheShown !== null ? cacheShare(cacheMs, CACHE_TTL[cacheTtl]) : null
   const place = config.hide.includes('branch') ? null : await read($, gitPlace)
   const chip = place ? gitChip(place, config.branchDetails) : null
+  const ci = config.hide.includes('actions') ? null : await read($, ciRun)
+  const ciNow = ci ? ciChip(ci, nowMs) : null
   const { head, what, rest, detail } = dashboardLines({
     auto: v.auto,
     paused: Boolean(v.pausedNow),
@@ -3507,7 +3673,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
     contextPercent: e.surface === 'terminal' && lastContext && lastContext.window ? lastContext.percent : null,
     // Desktop draws the branch as a chip after the cache; the terminal's first line is full, so it leads the second,
     // except while Haiku advises a handoff: that needs the line's room more.
-    branch: drawn || adviceNow ? null : chip?.line,
+    branch: drawn || adviceNow ? null : [chip?.line, ciNow?.line].filter(Boolean).join(' · ') || null,
     // A prompt on a cheaper model names it in the judge's line ("On Sonnet · Haiku: a small fix"), not beside the effort word.
     reason: adviceNow ? `Handoff would suit: ${adviceNow}` : config.hide.includes('reason') ? '' : reason,
     // The last reply's cost is left out of the bar: it was noise there. lastTurn still records it.
@@ -3675,7 +3841,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
             no width of its own (it only takes what is left, truncated), so it always fits the first row and goes first;
             the branch and then the cache keep their own widths (the ticking seconds never shift the row) and, once one
             no longer fits, it wraps to the hidden second row whole, taking what follows with it. */}
-        {Svg && (cacheShown !== null || chip || detail) ? (
+        {Svg && (cacheShown !== null || chip || ciNow || detail) ? (
           <Box key="dash-tail" flexGrow={1} flexShrink={1} minWidth={0} height={1} overflow="hidden" flexDirection="row" flexWrap="wrap" marginLeft={2}>
             <Box width={0} height={1} />
             {cacheShown !== null && ring !== null ? (
@@ -3698,11 +3864,19 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
                 <Text color={DASH_DIM}>{`${chip.name}${chip.marks}`}</Text>
               </Box>
             ) : null}
-            {detail || chip || cacheShown !== null ? (
+            {/* The Actions run, after the branch it ran on: its own width, wrapping away whole before the branch does. */}
+            {ci && ciNow ? (
+              <Box key="dash-ci" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null || chip ? 2 : 0}
+                hover={{ scope: 'dash-ci', backgroundColor: HOVER_BOX }}>
+                <Svg source={ciSvg(ci, CI_COLORS[ciTone(ci)])} alt={`actions ${ciTone(ci)}`} width={14} height={14} />
+                <Text color={DASH_DIM}>{ciNow.label}</Text>
+              </Box>
+            ) : null}
+            {detail || chip || ciNow || cacheShown !== null ? (
               // Over the reason, shown only while the rings, the cache or the branch is hovered, what they mean: a hover
               // can only reveal, so the tip is a layer on the band's colour that covers the reason. With the reason
               // switched off (the default) the box stays, empty, to hold the tips.
-              <Box key="dash-detail" position="relative" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null || chip ? 2 : 0}>
+              <Box key="dash-detail" position="relative" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null || chip || ciNow ? 2 : 0}>
                 {detail ? <Text dimColor wrap="truncate">{detail}</Text> : null}
                 {detail || cacheShown !== null ? (
                   <Box key="dash-cache-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
@@ -3714,6 +3888,12 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
                   <Box key="dash-branch-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
                     display="none" hover={{ scope: 'dash-branch', display: 'flex' }}>
                     <Text dimColor wrap="truncate">{chip.tip}</Text>
+                  </Box>
+                ) : null}
+                {ciNow ? (
+                  <Box key="dash-ci-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
+                    display="none" hover={{ scope: 'dash-ci', display: 'flex' }}>
+                    <Text dimColor wrap="truncate">{ciNow.tip}</Text>
                   </Box>
                 ) : null}
               </Box>
@@ -4264,6 +4444,7 @@ export const register: Register = (on, options) => {
           `hidden: ${config.hide.join(',') || 'nothing'}`,
           `git: ${JSON.stringify(await read($, gitPlace))}, read ${ago(gitReadAt)}${gitError ? `, ${gitError}` : ''}`,
           `git now: ${JSON.stringify(await readGit($).catch((error: unknown) => String(error).slice(0, 120)))}`,
+          `actions: ${JSON.stringify(await read($, ciRun))}${ciError ? `, ${ciError}` : ''}, next ask in ${Math.max(0, Math.round((ciNextAt - Date.now()) / 1000))}s`,
           `model: ${config.modelAuto === 'on' ? `cheaper when it can, now ${routed ?? 'the chat\'s'}` : 'always the chat\'s'}`,
           lastRequest
             ? `last request: app asked ${lastRequest.appModel} at ${lastRequest.appEffort ?? 'none'}, sent ${lastRequest.model} at ${lastRequest.effort ?? 'none'}${lastRequest.model === lastRequest.appModel && lastRequest.effort === lastRequest.appEffort ? ' (unchanged)' : ' (changed by effortless)'}, ${ago(lastRequest.at)}`
@@ -4560,6 +4741,7 @@ Saved to ${out}.md and .json` }
     const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
     const place = config.hide.includes('branch') ? null : await read($, gitPlace)
     const chip = place ? gitChip(place, config.branchDetails) : null
+    const ci = config.hide.includes('actions') ? null : await read($, ciRun)
     const cacheWords = v.cacheNow === null ? ''
       : config.cacheStyle === 'ring' ? `${cacheGlyph(cacheShare(cacheExpires - (await $.clock.now()), CACHE_TTL[cacheTtl]))} cache`
       : cacheLabel(v.cacheNow)
@@ -4645,6 +4827,7 @@ Saved to ${out}.md and .json` }
           <Text dimColor hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheWords}</Text>
         )}
         {chip ? <Text dimColor hover={{ scope: 'branch', backgroundColor: HOVER_BOX }}>{chip.line}</Text> : null}
+        {ci ? <Text color={CI_COLORS[ciTone(ci)]} hover={{ scope: 'ci', backgroundColor: HOVER_BOX }}>{ciChip(ci, await $.clock.now()).line}</Text> : null}
       </Box>
     )
   })
@@ -4692,13 +4875,18 @@ Saved to ${out}.md and .json` }
     const touch = touchOf(e.tool, input)
     const isList = e.tool === 'TodoWrite' || e.tool === 'TaskCreate' || e.tool === 'TaskUpdate'
     const known = id !== undefined && (await read($, agentsState)).some(a => a.id === id)
-    if (!touch && !known && !(id === undefined && isList)) return gitAfter(await next(e))
+    if (!touch && !known && !(id === undefined && isList)) {
+      const result = gitAfter(await next(e))
+      if (!result.isReadOnly) await ciAfter($, String(e.tool), input)
+      return result
+    }
     if (known && id !== undefined) {
       const now = await $.clock.now()
       const file = touch ? (relPath(touch.path, await $.session.root()) ?? undefined) : undefined
       await agentSet($, id, a => ({ ...a, now: toolLine(e.tool, input), toolSince: now, file }))
     }
     const result = gitAfter(await next(e))
+    if (!result.isReadOnly) await ciAfter($, String(e.tool), input)
     const ok = !('deny' in result && result.deny) && !result.isError
     if (ok && touch) await fileTouched($, touch.path, touch.edited, id ?? 'main').catch(() => undefined)
     if (ok && id === undefined && isList) {
@@ -4938,6 +5126,7 @@ Saved to ${out}.md and .json` }
           {hidden.includes('branch') ? null : <Text key="show-detail-with" dimColor>with</Text>}
           {hidden.includes('branch') ? null : ([['changes', 'changes'], ['sync', 'ahead/behind'], ['repo', 'repo']] as const).map(detailBox)}
         </Box>,
+        box(['actions', 'Actions']),
         box(['reason', 'Judge line']),
       ]
       // The alerts sit in the Handoff card, next to the share of context the context alert waits for.
