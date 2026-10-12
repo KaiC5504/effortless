@@ -3461,6 +3461,9 @@ let helpersSeen: string | undefined
 let helpersFlipAt = 0
 
 /** The dashboard: what effortless is doing, and Auto, Handoff and settings. The slot above the prompt at rest. */
+// The app's slot for the band, in rows of 19 px: the band's 37 px and the 10.5 px the slot pads it with above and below.
+const SLOT_ROWS = 58 / 19
+
 async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const els = themedEls($.ui.resolve(e))
   const { Box, Text, Button } = els
@@ -3595,7 +3598,13 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const glowSource = Svg ? judgeGlowAt(judgeStartedAt, judgeEndedAt, glowNow) : null
   if (glowSource && judgeEndedAt !== null) renderLog.push(`${new Date().toISOString()} ${loadedSession} glow: fade drawn at +${Math.round(glowNow - Math.max(judgeEndedAt, judgeStartedAt + JUDGE_RISE_MS))} ms, lead ${Math.round(drawLead)} ms, ${Math.round(glowNow - drawLead - nowMs)} ms after the draw began`)
   return (
-    <Box key="dash" position="relative" flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
+    // The app pads the band's slot on a lighter grey (8 px a side, 10.5 px above and below); the band reaches over that
+    // padding to the slot's edges. Sideways a negative margin does it. The app drops a root's vertical margins and takes
+    // whole cells only for offsets, so the band's face is a layer a row taller each way with the slot's own height
+    // centred in it, under the row, which keeps its height and a clear border so the slot does not grow.
+    <Box key="dash-frame" position="relative" marginX={-1} backgroundColor={DASH_BG}>
+    <Box key="dash-face" position="absolute" top={-1} bottom={-1} left={0} right={0} flexDirection="column" justifyContent="center">
+    <Box key="dash-face-fill" position="relative" height={SLOT_ROWS} flexShrink={0} overflow="hidden"
       backgroundColor={DASH_BG} borderStyle="round" borderColor={DASH_EDGE}>
       {Svg ? (
         // Auto off: the art goes, so the bar reads as resting, not working.
@@ -3616,6 +3625,11 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           <Svg source={glowSource} alt="deciding glow" width={AUTO_GLOW_W} height={AUTO_GLOW_H} />
         </Box>
       ) : null}
+    </Box>
+    </Box>
+    <Box key="dash" position="relative" flexGrow={1} flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
+      borderStyle="round" borderColor="#00000000">
+      <Box position="absolute" top={0} left={0} />
       {/* One row: the effort word, the context ring, the cache, then the reason and the last reply, dim. The word never shrinks;
           when room runs out the reason goes first (it shrinks a hundred times faster), then the cache, and the row clips
           rather than run under the buttons. Siblings, not nested: a shrunk parent let the word spill under the ring. */}
@@ -3739,6 +3753,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           </Box>
         ) : null}
       </Box>
+    </Box>
     </Box>
   )
 }
