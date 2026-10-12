@@ -3514,8 +3514,9 @@ const KIND_SLIDE_DELAY_MS = 70
 let kindFlipAt = 0
 /** How long the bar's edges glow after Auto is switched on. */
 const AUTO_GLOW_MS = 2600
-const AUTO_GLOW_W = 760
-const AUTO_GLOW_H = 37
+const AUTO_GLOW_W = 768
+// The rim glows trace a one-row band on the desktop, which fills the app's slot: its 37 px and the 10.5 px above and below.
+const AUTO_GLOW_H = 58
 /** The image starts inside the band's side borders but over its top and bottom ones (the layer's top and bottom are the
  * band's outer edge, its sides the inner), so the line is inset 0.75 px at the sides and 1.75 px at top and bottom: 1 px
  * inside the border all round.
@@ -3625,8 +3626,53 @@ let helpersSeen: string | undefined
 let helpersFlipAt = 0
 
 /** The dashboard: what effortless is doing, and Auto, Handoff and settings. The slot above the prompt at rest. */
-// The app's slot for the band, in rows of 19 px: the band's 37 px and the 10.5 px the slot pads it with above and below.
-const SLOT_ROWS = 58 / 19
+// The app pads the band's slot on a lighter grey: 8 px a side (a cell) and 10.5 px above and below, rows being 19 px.
+const SLOT_PAD = 10.5 / 19
+
+/** A band's face, reaching over the padding of the app's slot to its edges. Sideways the band's root takes a negative
+ * margin; the app drops a root's vertical margins and takes whole cells only for offsets, so the face is a layer a row
+ * taller each way, the rest of that row taken up by spacers. It sits under the band's content, which keeps its height
+ * and a clear border so the slot does not grow. */
+function slotFace(els: { Box: unknown }, key: string, children: unknown, bg: unknown = DASH_BG, edge: unknown = DASH_EDGE) {
+  const { Box: B } = els as unknown as { Box: (p: Record<string, unknown>) => unknown }
+  return (
+    <B key={key} position="absolute" top={-1} bottom={-1} left={0} right={0} flexDirection="column">
+      <B height={1 - SLOT_PAD} flexShrink={0} />
+      <B key={`${key}-fill`} position="relative" flexGrow={1} overflow="hidden" backgroundColor={bg} borderStyle="round" borderColor={edge}>
+        {children}
+      </B>
+      <B height={1 - SLOT_PAD} flexShrink={0} />
+    </B>
+  )
+}
+
+type Drawn = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+const CONTROLS = new Set(['Button', 'Input', 'Select', 'Client', 'Link'])
+const holdsControl = (node: unknown): boolean => {
+  const n = node as Drawn | null
+  return Boolean(n && typeof n === 'object' && (CONTROLS.has(String(n.type)) || (n.children ?? []).some(holdsControl)))
+}
+
+/** Any other band on the desktop (the alerts, Compact, Handoff, setup, the cards) fills the slot as the dashboard does:
+ * its frame takes its place, its face its colours and its art (absolute layers holding no control), and the band
+ * itself keeps its content, a clear border and its key. Built with the surface's own elements: the band's colours are
+ * themed already, and a themed element would turn them a second time. */
+function fillSlot($: EngineInterface, e: RenderInput<'AbovePrompt'>, tree: unknown): unknown {
+  const band = tree as Drawn | null
+  const props = band?.props
+  if (e.surface === 'terminal' || e.props.hasSurvey || !band || band.type !== 'Box' || !props) return tree
+  if (typeof props.backgroundColor !== 'string' || typeof props.borderStyle !== 'string') return tree
+  const els = $.ui.resolve(e) as unknown as { Box: (p: Record<string, unknown>, ...kids: unknown[]) => unknown }
+  const kids = (band.children ?? []).flat()
+  const art = kids.filter(k => (k as Drawn | null)?.props?.position === 'absolute' && !holdsControl(k))
+  const rest = kids.filter(k => !art.includes(k))
+  const key = String(props.key ?? 'band')
+  const { backgroundColor, borderColor, ...own } = props
+  return h(els.Box, { key: `${key}-frame`, position: 'relative', flexDirection: 'column', marginX: -1, backgroundColor },
+    slotFace(els, `${key}-face`, h(els.Box, { key: `${key}-face-layers`, position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }, ...art), backgroundColor, borderColor),
+    h(els.Box, { ...own, position: 'relative', borderColor: '#00000000' }, h(els.Box, { position: 'absolute', top: 0, left: 0 }), ...rest),
+  )
+}
 
 async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) {
   const els = themedEls($.ui.resolve(e))
@@ -3764,14 +3810,9 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const glowSource = Svg ? judgeGlowAt(judgeStartedAt, judgeEndedAt, glowNow) : null
   if (glowSource && judgeEndedAt !== null) renderLog.push(`${new Date().toISOString()} ${loadedSession} glow: fade drawn at +${Math.round(glowNow - Math.max(judgeEndedAt, judgeStartedAt + JUDGE_RISE_MS))} ms, lead ${Math.round(drawLead)} ms, ${Math.round(glowNow - drawLead - nowMs)} ms after the draw began`)
   return (
-    // The app pads the band's slot on a lighter grey (8 px a side, 10.5 px above and below); the band reaches over that
-    // padding to the slot's edges. Sideways a negative margin does it. The app drops a root's vertical margins and takes
-    // whole cells only for offsets, so the band's face is a layer a row taller each way with the slot's own height
-    // centred in it, under the row, which keeps its height and a clear border so the slot does not grow.
+    // The band fills the app's slot to its edges (see slotFace).
     <Box key="dash-frame" position="relative" marginX={-1} backgroundColor={DASH_BG}>
-    <Box key="dash-face" position="absolute" top={-1} bottom={-1} left={0} right={0} flexDirection="column" justifyContent="center">
-    <Box key="dash-face-fill" position="relative" height={SLOT_ROWS} flexShrink={0} overflow="hidden"
-      backgroundColor={DASH_BG} borderStyle="round" borderColor={DASH_EDGE}>
+    {slotFace(els, 'dash-face', <Box key="dash-face-layers" position="absolute" top={0} left={0} right={0} bottom={0}>
       {Svg ? (
         // Auto off: the art goes, so the bar reads as resting, not working.
         v.auto ? (
@@ -3791,8 +3832,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           <Svg source={glowSource} alt="deciding glow" width={AUTO_GLOW_W} height={AUTO_GLOW_H} />
         </Box>
       ) : null}
-    </Box>
-    </Box>
+    </Box>)}
     <Box key="dash" position="relative" flexGrow={1} flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
       borderStyle="round" borderColor="#00000000">
       <Box position="absolute" top={0} left={0} />
@@ -4948,7 +4988,7 @@ Saved to ${out}.md and .json` }
   // On desktop nothing is drawn here, except the question when the judge suggests another model.
   // Draws the bands and the settings panel. Counted and guarded so /effortless debug can say whether the app asks
   // for it at all and whether drawing failed: an error here otherwise only leaves the slot empty.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => fillSlot($, e, await (async () => {
     // Setup changes a reload cut off are saved from here: the reloaded plugin draws before anything else runs.
     void drainSetupSave($).catch(() => undefined)
     void afterLoad($).catch(() => undefined)
@@ -5157,12 +5197,13 @@ Saved to ${out}.md and .json` }
         // The dashboard's look: the neutral band and its quiet edge, purple only on the star, no art behind the rows (it
         // made them busy). The entrance
         // sweep plays once, behind everything, as the panel opens.
-        <Box key="settings" position="relative" flexDirection="column" gap={roomy && !term ? 1 : 0} paddingX={term ? 1 : 2} overflow="hidden"
-          backgroundColor={DASH_BG} borderStyle="round" borderColor={DASH_EDGE}>
-          {term ? null : introLayer({ Box, Svg }, 'settings', await introShows($, 'settings'))}
-          {/* The top bar: barely a shade lighter than the band, holding the title, Save and the cross. */}
-          {!term ? (
-            <Box key="settings-bar" position="absolute" top={-1} left={0} right={0} height={3.5} overflow="hidden" backgroundColor={DASH_HEAD}>
+        // On desktop it fills the app's slot to its edges, as the dashboard does (see slotFace): the entrance sweep and the
+        // top bar go on the face, the bar reaching up over the slot's padding as well.
+        <Box key="settings-frame" position="relative" flexDirection="column" {...(term ? {} : { marginX: -1 })} backgroundColor={DASH_BG}>
+        {term ? null : slotFace({ Box }, 'settings-face', [
+          introLayer({ Box, Svg }, 'settings', await introShows($, 'settings')),
+          // The top bar: barely a shade lighter than the band, holding the title, Save and the cross.
+            <Box key="settings-bar" position="absolute" top={0} left={0} right={0} height={2.5 + SLOT_PAD} overflow="hidden" backgroundColor={DASH_HEAD}>
               {/* The mark, big, tilted and cut off by the bar's edges, behind the title and the buttons. */}
               <Box key="settings-bar-mark" position="absolute" top={-2} right={20} marginTop={1}>
                 <Svg source={SETTINGS_MARK} alt="effortless mark" width={140} height={140} />
@@ -5171,13 +5212,16 @@ Saved to ${out}.md and .json` }
               <Box key="settings-rule" position="absolute" bottom={0} left={0} right={0} height={1} alignItems="flex-end">
                 <Svg source={`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1" viewBox="0 0 1600 1" preserveAspectRatio="none"><rect width="1600" height="1" fill="${DASH_EDGE}"/></svg>`} alt="rule" width={1600} height={1} />
               </Box>
-            </Box>
-          ) : null}
+            </Box>,
+        ])}
+        <Box key="settings" position="relative" flexDirection="column" gap={roomy && !term ? 1 : 0} paddingX={term ? 1 : 2} overflow="hidden"
+          {...(term ? { backgroundColor: DASH_BG, borderStyle: 'round', borderColor: DASH_EDGE } : { borderStyle: 'round', borderColor: '#00000000' })}>
+          {term ? null : <Box position="absolute" top={0} left={0} />}
           {/* Title and buttons are centred in the whole bar (it reaches from the border to the line under it), so the
               space above them equals the space below. The terminal has no bar: both sit in the flow on one row that
               wraps, since two absolute layers drew over each other in a narrow window ("SettCheck for updates"). */}
           {headRow([
-          <Box key="settings-title" {...(term ? { flexShrink: 0 } : { position: 'absolute', top: 0, left: 2, height: 2.5 })} flexDirection="row" alignItems="center" gap={1}>
+          <Box key="settings-title" {...(term ? { flexShrink: 0 } : { position: 'absolute', top: 0, left: 2, height: 2.5 - SLOT_PAD })} flexDirection="row" alignItems="center" gap={1}>
             {term ? <Text color={ACCENT} bold>✦</Text> : null}
             {Svg && !term ? <Svg source={SETTINGS_TITLE} alt="effortless" width={92} height={28} /> : <Text color={DASH_TEXT} bold>effortless</Text>}
             {ownVersion ? <Text color="#6b6b73">v{ownVersion}</Text> : null}
@@ -5193,7 +5237,7 @@ Saved to ${out}.md and .json` }
             )}
             {dirty ? <Text dimColor> · unsaved changes</Text> : null}
           </Box>,
-          <Box key="settings-actions" {...(term ? { flexShrink: 1, flexWrap: 'wrap', columnGap: 2 } : { position: 'absolute', top: 0, right: 2, height: 2.5, gap: 2 })} flexDirection="row" alignItems="center">
+          <Box key="settings-actions" {...(term ? { flexShrink: 1, flexWrap: 'wrap', columnGap: 2 } : { position: 'absolute', top: 0, right: 2, height: 2.5 - SLOT_PAD, gap: 2 })} flexDirection="row" alignItems="center">
             {checking === 'checking' ? (
               <Text dimColor>Checking…</Text>
             ) : checking === 'newest' ? (
@@ -5358,6 +5402,7 @@ Saved to ${out}.md and .json` }
               </Box>
             </Box>
           )}
+        </Box>
         </Box>
       )
     }
@@ -5888,5 +5933,5 @@ Saved to ${out}.md and .json` }
         renderLog.push(`${new Date().toISOString()} ${loadedSession} draw took ${Date.now() - lastRenderAt} ms`)
       }
     }
-  })
+  })()))
 }
