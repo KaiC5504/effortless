@@ -4167,14 +4167,12 @@ describe('git branch', () => {
     })),
   })
 
-  test('Actions: a run read to its job and step, the chip says n/m first, and a fork asks its own repository', () => {
+  test('Actions: a run read to its job and step, the chip says the workflow and the step, and a fork asks its own repository', () => {
     const running = ciFrom(RUN, [{ name: 'lint', status: 'completed', conclusion: 'success', steps: [] }, jobAt(4)])
     expect(running).toMatchObject({ job: 'test', step: 'Run tests', done: 4, total: 6, jobsDone: 1, jobsTotal: 2 })
     expect(ciTone(running)).toBe('running')
-    // Two jobs: the one running is named before its step.
-    expect(ciChip(running)).toEqual({ label: 'CI 4/6 · test: Run tests', line: '▶ CI 4/6 · test: Run tests' })
+    expect(ciChip(running)).toEqual({ label: 'CI · Run tests', line: '▶ CI · Run tests' })
     const single = ciFrom(RUN, [jobAt(4)])
-    expect(ciChip(single).label).toBe('CI 4/6 · Run tests')
     const failed = ciFrom({ ...RUN, status: 'completed', conclusion: 'failure' }, [jobAt(3, 3)])
     expect(ciChip(failed)).toEqual({ label: 'CI · Build', line: '✗ CI · Build' })
     const passed = ciFrom({ ...RUN, status: 'completed', conclusion: 'success' }, [])
@@ -4182,8 +4180,8 @@ describe('git branch', () => {
     expect(ciChip(ciFrom({ ...RUN, status: 'queued' }, [])).label).toBe('CI · queued')
     // The desktop cuts a long step to its room; the terminal's line cuts it itself.
     const long = { ...single, step: 'Post Run subosito/flutter-action@v2.16.0' }
-    expect(ciChip(long).label).toBe('CI 4/6 · Post Run subosito/flutter-action@v2.16.0')
-    expect(ciChip(long).line).toBe('▶ CI 4/6 · Post Run subosito/flutt…')
+    expect(ciChip(long).label).toBe('CI · Post Run subosito/flutter-action@v2.16.0')
+    expect(ciChip(long).line).toBe('▶ CI · Post Run subosito/flutt…')
     expect(ciSvg(running, '#e0a33a')).toContain('stroke-dasharray')
     expect(ciSvg(failed, '#e5534b')).toContain('M5 5 9 9')
     expect(githubRepo('https://github.com/KaiC5504/Kazumi.git\n')).toBe('KaiC5504/Kazumi')
@@ -4218,43 +4216,35 @@ describe('git branch', () => {
     await closeSetup($, DESK_BAND)
     await mocked.advance(16_000)
     let band = await $.ui.mount(DESK_BAND)
-    // Going: a line of its own under the row, no result chip in the row.
-    expect(await band.find({ key: 'dash-runs' })).toBeDefined()
-    expect(await band.find({ key: 'dash-ci' })).toBeUndefined()
-    expect(await drawn(band)).toContain('"children":["CI 2/6 · Install"]')
+    expect(await band.find({ key: 'dash-ci' })).toBeDefined()
+    expect(await drawn(band)).toContain('"children":["CI · Install"]')
     expect(gh.ran.some(c => c.startsWith('gh run list --branch main') && c.endsWith('-R KaiC5504/Kazumi'))).toBe(true)
     await band.unmount()
     // While it runs it is asked every 10 s.
     gh.set([RUN], [jobAt(4)])
     await mocked.advance(11_000)
     band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"children":["CI 4/6 · Run tests"]')
+    expect(await drawn(band)).toContain('"children":["CI · Run tests"]')
     await band.unmount()
     gh.set([{ ...RUN, status: 'completed', conclusion: 'success' }])
     await mocked.advance(11_000)
     band = await $.ui.mount(DESK_BAND)
-    expect(await band.find({ key: 'dash-runs' })).toBeUndefined()
-    expect(await band.find({ key: 'dash-ci' })).toBeDefined()
     expect(await drawn(band)).toContain('"children":["CI"]')
     expect(await drawn(band)).toContain('"alt":"actions success"')
     await band.unmount()
   })
 
-  test('several runs going: the first two each get their place on the line under the row, the rest are counted', DASH, async ($, on) => {
+  test('several runs going: the newest is shown, on the one line', DASH, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
-    const runs = [RUN, { ...RUN, databaseId: 8, workflowName: 'TestFlight' }, { ...RUN, databaseId: 9, workflowName: 'Lint' }, { ...RUN, databaseId: 5, status: 'completed', conclusion: 'success' }]
-    ghSays(on, runs, [jobAt(3)])
+    const runs = [{ ...RUN, databaseId: 8, workflowName: 'TestFlight' }, RUN, { ...RUN, databaseId: 5, status: 'completed', conclusion: 'success' }]
+    const gh = ghSays(on, runs, [jobAt(3)])
     await start($, on)
     await closeSetup($, DESK_BAND)
     await mocked.advance(16_000)
     const band = await $.ui.mount(DESK_BAND)
-    expect(await band.find({ key: 'dash-run-7' })).toBeDefined()
-    expect(await band.find({ key: 'dash-run-8' })).toBeDefined()
-    expect(await band.find({ key: 'dash-run-9' })).toBeUndefined()
-    const text = await drawn(band)
-    expect(text).toContain('"children":["TestFlight 3/6 · Build"]')
-    expect(text).toContain('"children":["+1 more"]')
+    expect(await drawn(band)).toContain('"children":["TestFlight · Build"]')
+    expect(gh.ran.filter(c => c.startsWith('gh run view'))).toEqual(gh.ran.filter(c => c.startsWith('gh run view 8')))
     await band.unmount()
   })
 
@@ -4266,7 +4256,7 @@ describe('git branch', () => {
     await closeSetup($, TERM_BAND)
     await mocked.advance(16_000)
     const band = await $.ui.mount(TERM_BAND)
-    expect(await drawn(band)).toContain('⎇ main *2 ↑2 · ▶ CI 4/6 · Run tests')
+    expect(await drawn(band)).toContain('⎇ main *2 ↑2 · ▶ CI · Run tests')
     await band.unmount()
   })
 

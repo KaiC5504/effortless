@@ -2424,12 +2424,11 @@ async function refreshGit($: EngineInterface) {
   }
 }
 
-// The GitHub Actions runs on the chat's branch: those still going on a line of their own under the dashboard, each with
-// the step it is on and how far through its job; once none is, the newest's tick or cross after the branch chip. Asked
-// of gh, the person's own GitHub CLI and login.
+// The GitHub Actions run on the chat's branch, after the branch chip: the newest still going, with the step it is on, or
+// else the newest's tick or cross. Asked of gh, the person's own GitHub CLI and login.
 const ciRuns = atom({ plugin: 'effortless', key: 'ciRuns' } as const, null)
-// Runs going at once that get their own place, with their jobs read; the rest are counted.
-const CI_SHOWN = 2
+// Runs going at once that are read to their step: the newest. Two at once is rare, and the bar has room for one.
+const CI_SHOWN = 1
 // gh calls GitHub's API: often while a run goes, seldom while nothing does, rarely where gh or a GitHub remote is
 // missing (the answer would not change). Right after a push the new run takes a few seconds to appear, so for a
 // while after one it is asked as often as during a run.
@@ -2488,16 +2487,13 @@ export function ciTone(c: CiRun): CiTone {
 
 const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
 
-/** What a run says: the workflow and n/m of its job's steps while it runs, then the job (when the run has several) and
- * the step it is on; the step that failed; or the workflow alone once it passed. The desktop cuts the label to the room
- * it has; the terminal's line cuts the step itself. */
+/** What a run says: the workflow and the step it is on (its ring shows how far through), the step that failed, or the
+ * workflow alone once it passed. The desktop cuts the label to the room it has; the terminal's line cuts the step. */
 export function ciChip(c: CiRun): { label: string; line: string } {
   const tone = ciTone(c)
-  const where = (step: string) => `${c.jobsTotal > 1 && c.job ? `${c.job}: ` : ''}${step}`
   const words = (step: (s: string) => string) =>
-    tone === 'running' ? `${c.workflow}${c.total ? ` ${c.done}/${c.total}` : ''}${c.step ? ` · ${where(step(c.step))}` : ''}`
+    (tone === 'running' || tone === 'failure') && c.step ? `${c.workflow} · ${step(c.step)}`
     : tone === 'queued' ? `${c.workflow} · queued`
-    : tone === 'failure' && c.step ? `${c.workflow} · ${where(step(c.step))}`
     : c.workflow
   const mark = { running: '▶', queued: '◷', success: '✓', failure: '✗', other: '⊘' }[tone]
   return { label: words(step => step), line: `${mark} ${words(step => cut(step, STEP_MAX))}` }
@@ -3669,12 +3665,8 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const ring = config.cacheStyle === 'ring' && cacheShown !== null ? cacheShare(cacheMs, CACHE_TTL[cacheTtl]) : null
   const place = config.hide.includes('branch') ? null : await read($, gitPlace)
   const chip = place ? gitChip(place, config.branchDetails) : null
-  // Runs still going take a line of their own under the row; once none is, the newest's result sits after the branch.
-  const ciState = config.hide.includes('actions') ? null : await read($, ciRuns)
-  const ciGoing = ciState?.runs.filter(r => r.status !== 'completed') ?? []
-  const ci = ciGoing.length ? null : (ciState?.runs[0] ?? null)
+  const ci = config.hide.includes('actions') ? null : ((await read($, ciRuns))?.runs[0] ?? null)
   const ciNow = ci ? ciChip(ci) : null
-  const ciMore = ciGoing.length ? (ciState?.more ?? 0) : 0
   const { head, what, rest, detail } = dashboardLines({
     auto: v.auto,
     paused: Boolean(v.pausedNow),
@@ -3686,7 +3678,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
     contextPercent: e.surface === 'terminal' && lastContext && lastContext.window ? lastContext.percent : null,
     // Desktop draws the branch as a chip after the cache; the terminal's first line is full, so it leads the second,
     // except while Haiku advises a handoff: that needs the line's room more.
-    branch: drawn || adviceNow ? null : [chip?.line, ciNow?.line, ...ciGoing.map(r => ciChip(r).line), ciMore ? `+${ciMore}` : ''].filter(Boolean).join(' · ') || null,
+    branch: drawn || adviceNow ? null : [chip?.line, ciNow?.line].filter(Boolean).join(' · ') || null,
     // A prompt on a cheaper model names it in the judge's line ("On Sonnet · Haiku: a small fix"), not beside the effort word.
     reason: adviceNow ? `Handoff would suit: ${adviceNow}` : config.hide.includes('reason') ? '' : reason,
     // The last reply's cost is left out of the bar: it was noise there. lastTurn still records it.
@@ -3800,10 +3792,9 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
         </Box>
       ) : null}
     </Box>)}
-    <Box key="dash" position="relative" flexGrow={1} flexDirection="column" paddingX={1} overflow="hidden"
+    <Box key="dash" position="relative" flexGrow={1} flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
       borderStyle="round" borderColor="#00000000">
       <Box position="absolute" top={0} left={0} />
-      <Box key="dash-row" flexDirection="row" alignItems="center">
       {/* One row: the effort word, the context ring, the cache, then the reason and the last reply, dim. The word never shrinks;
           when room runs out the reason goes first (it shrinks a hundred times faster), then the cache, and the row clips
           rather than run under the buttons. Siblings, not nested: a shrunk parent let the word spill under the ring. */}
@@ -3869,10 +3860,10 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
                 <Text color={DASH_DIM}>{`${chip.name}${chip.marks}`}</Text>
               </Box>
             ) : null}
-            {/* The finished run, after the branch it ran on, taking what room is left (as the reason does), its words cut at
-                the end: a failed step's name can be long. */}
+            {/* The run, after the branch it ran on, taking what room is left (as the reason does), its words cut at the end:
+                a step's name can be long. */}
             {ci && ciNow ? (
-              <Box key="dash-ci" width={0} flexGrow={1} flexShrink={1} minWidth={16} flexDirection="row" gap={1} alignItems="center"
+              <Box key="dash-ci" width={0} flexGrow={1} flexShrink={1} minWidth={4} flexDirection="row" gap={1} alignItems="center"
                 marginLeft={cacheShown !== null || chip ? 2 : 0}>
                 <Box flexShrink={0}>
                   <Svg source={ciSvg(ci, CI_COLORS[ciTone(ci)])} alt={`actions ${ciTone(ci)}`} width={14} height={14} />
@@ -3922,24 +3913,6 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           </Box>
         ) : null}
       </Box>
-      </Box>
-      {/* The runs still going, a line of their own while they last: each its ring, its count and the step it is on, cut
-          to share the line; the runs past the first few counted at its end. */}
-      {Svg && ciGoing.length ? (
-        <Box key="dash-runs" flexDirection="row" alignItems="center" gap={3} overflow="hidden">
-          {ciGoing.map(r => (
-            <Box key={`dash-run-${r.id}`} flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={12}>
-              <Box flexShrink={0}>
-                <Svg source={ciSvg(r, CI_COLORS[ciTone(r)])} alt={`actions ${ciTone(r)}`} width={14} height={14} />
-              </Box>
-              <Box flexShrink={1} minWidth={0}>
-                <Text color={DASH_DIM} wrap="truncate">{ciChip(r).label}</Text>
-              </Box>
-            </Box>
-          ))}
-          {ciMore ? <Box flexShrink={0}><Text color={DASH_TEXT}>{`+${ciMore} more`}</Text></Box> : null}
-        </Box>
-      ) : null}
     </Box>
     </Box>
   )
