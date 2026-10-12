@@ -2271,29 +2271,6 @@ async function snap($: EngineInterface) {
 }
 type Snap = Awaited<ReturnType<typeof snap>>
 
-/** The hover cards' text: what Auto did and why, and what the cache countdown means with the context it guards. */
-function hoverTips(v: Snap): { effort: string; cache: string } {
-  const effortTip = !v.auto
-    ? 'Auto is off: the effort stays as you set it. The power button turns Auto on.'
-    : v.pausedNow
-      ? 'Auto waits on this model: an effort change would rewrite its prompt cache.'
-      : !effortOf(v, v.modelNow ?? 'sonnet')
-        ? 'This model runs without an effort level, so Auto has nothing to set.'
-      : [
-          v.current ? `Auto picked ${EFFORT_LABELS[v.current.effort]}${v.current.by !== 'manual' ? ` (${v.current.by})` : ''}` : 'Auto picks the effort for each message',
-          v.current?.why ? `Why: ${v.current.why}` : '',
-          `Lean: ${['much cheaper', 'cheaper', 'as the judge says', 'smarter', 'much smarter'][config.bias + 2]} · range ${config.floor} to ${config.ceiling}`,
-        ]
-          .filter(Boolean)
-          .join(' · ')
-  const ctx = lastContext && lastContext.window ? ` · Context ${lastContext.percent}% · ${kTokens(lastContext.tokens)}/${kTokens(lastContext.window)}` : ''
-  const cacheTip =
-    v.cacheNow === 0
-      ? `Prompt cache cold: the next message reads the whole chat again at full price. Compact first to save.${ctx}`
-      : `Prompt cache warm for ${cacheLabel(v.cacheNow ?? 0)} more: the next message reads the chat from cache, cheap and fast.${ctx}`
-  return { effort: effortTip, cache: cacheTip }
-}
-
 /** The effort to show: yours or the judge's, else what the app itself runs with; none on Haiku. */
 function effortOf(v: Snap, inUse: ModelKey): Effort | undefined {
   if (inUse === 'haiku') return undefined
@@ -3868,11 +3845,9 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           </Box>
         ) : null}
         {/* What shows when room runs out, most needed first: the effort and the context never shrink; the cache shrinks
-            next and goes; the reason (dim, after it) goes first of all. Hovering the ring or the cache swaps the reason
-            for what they mean. */}
+            next and goes; the reason (dim, after it) goes first of all. */}
         {Svg && lastContext && lastContext.window ? (
-          <Box key="dash-ring" flexShrink={0} marginLeft={2} flexDirection="row" gap={1} alignItems="center"
-            hover={{ scope: 'dash-cache', backgroundColor: HOVER_BOX }}>
+          <Box key="dash-ring" flexShrink={0} marginLeft={2} flexDirection="row" gap={1} alignItems="center">
             <Svg source={ringSvg(lastContext.percent, DASH_TEXT)} alt={`${Math.round(lastContext.percent)}% of context`} width={16} height={16} />
             <Text color={DASH_TEXT}>{`${Math.round(lastContext.percent)}%`}</Text>
           </Box>
@@ -3885,12 +3860,12 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           <Box key="dash-tail" flexGrow={1} flexShrink={1} minWidth={0} height={1} overflow="hidden" flexDirection="row" flexWrap="wrap" marginLeft={2}>
             <Box width={0} height={1} />
             {cacheShown !== null && ring !== null ? (
-              <Box key="dash-cache-ring" flexShrink={0} flexDirection="row" gap={1} alignItems="center" hover={{ scope: 'dash-cache', backgroundColor: HOVER_BOX }}>
+              <Box key="dash-cache-ring" flexShrink={0} flexDirection="row" gap={1} alignItems="center">
                 <Svg source={cacheRingSvg(ring, cacheColor(cacheShown) ?? DASH_DIM)} alt={`cache ${cacheLabel(cacheShown)} left`} width={16} height={16} />
                 <Text color={DASH_DIM}>cache</Text>
               </Box>
             ) : cacheShown !== null ? (
-              <Box key="dash-cache-time" width={11} flexShrink={0} hover={{ scope: 'dash-cache', backgroundColor: HOVER_BOX }}>
+              <Box key="dash-cache-time" width={11} flexShrink={0}>
                 <Svg source={cacheClockSvg(cacheMs, cacheShown === 0 ? ICE : (cacheColor(cacheShown) ?? DASH_DIM))}
                   alt={`cache ${cacheClock(cacheMs)}`} width={84} height={17} />
               </Box>
@@ -3898,44 +3873,21 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
             {/* The branch, after the cache: grey like it, the mark in the accent in a linked worktree. Its own width
                 and no less, so when room runs out it wraps away whole, after the reason and before the cache. */}
             {chip && place ? (
-              <Box key="dash-branch" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null ? 2 : 0}
-                hover={{ scope: 'dash-branch', backgroundColor: HOVER_BOX }}>
+              <Box key="dash-branch" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null ? 2 : 0}>
                 <Svg source={branchSvg(place.worktree ? ACCENT : DASH_DIM, Boolean(place.worktree))} alt={place.worktree ? 'worktree' : 'branch'} width={14} height={14} />
                 <Text color={DASH_DIM}>{`${chip.name}${chip.marks}`}</Text>
               </Box>
             ) : null}
             {/* The Actions run, after the branch it ran on: its own width, wrapping away whole before the branch does. */}
             {ci && ciNow ? (
-              <Box key="dash-ci" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null || chip ? 2 : 0}
-                hover={{ scope: 'dash-ci', backgroundColor: HOVER_BOX }}>
+              <Box key="dash-ci" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null || chip ? 2 : 0}>
                 <Svg source={ciSvg(ci, CI_COLORS[ciTone(ci)])} alt={`actions ${ciTone(ci)}`} width={14} height={14} />
                 <Text color={DASH_DIM}>{ciNow.label}</Text>
               </Box>
             ) : null}
-            {detail || chip || ciNow || cacheShown !== null ? (
-              // Over the reason, shown only while the rings, the cache or the branch is hovered, what they mean: a hover
-              // can only reveal, so the tip is a layer on the band's colour that covers the reason. With the reason
-              // switched off (the default) the box stays, empty, to hold the tips.
-              <Box key="dash-detail" position="relative" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null || chip || ciNow ? 2 : 0}>
-                {detail ? <Text dimColor wrap="truncate">{detail}</Text> : null}
-                {detail || cacheShown !== null ? (
-                  <Box key="dash-cache-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
-                    display="none" hover={{ scope: 'dash-cache', display: 'flex' }}>
-                    <Text dimColor wrap="truncate">{hoverTips(v).cache.replace(/^Prompt cache/, 'Cache')}</Text>
-                  </Box>
-                ) : null}
-                {chip ? (
-                  <Box key="dash-branch-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
-                    display="none" hover={{ scope: 'dash-branch', display: 'flex' }}>
-                    <Text dimColor wrap="truncate">{chip.tip}</Text>
-                  </Box>
-                ) : null}
-                {ciNow ? (
-                  <Box key="dash-ci-tip" position="absolute" top={0} left={0} right={0} bottom={0} backgroundColor={DASH_BG}
-                    display="none" hover={{ scope: 'dash-ci', display: 'flex' }}>
-                    <Text dimColor wrap="truncate">{ciNow.tip}</Text>
-                  </Box>
-                ) : null}
+            {detail ? (
+              <Box key="dash-detail" width={0} flexGrow={1} flexShrink={1} minWidth={10} marginLeft={cacheShown !== null || chip || ciNow ? 2 : 0}>
+                <Text dimColor wrap="truncate">{detail}</Text>
               </Box>
             ) : null}
           </Box>
@@ -4866,8 +4818,8 @@ Saved to ${out}.md and .json` }
         ) : (
           <Text dimColor hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheWords}</Text>
         )}
-        {chip ? <Text dimColor hover={{ scope: 'branch', backgroundColor: HOVER_BOX }}>{chip.line}</Text> : null}
-        {ci ? <Text color={CI_COLORS[ciTone(ci)]} hover={{ scope: 'ci', backgroundColor: HOVER_BOX }}>{ciChip(ci, await $.clock.now()).line}</Text> : null}
+        {chip ? <Text dimColor>{chip.line}</Text> : null}
+        {ci ? <Text color={CI_COLORS[ciTone(ci)]}>{ciChip(ci, await $.clock.now()).line}</Text> : null}
       </Box>
     )
   })
