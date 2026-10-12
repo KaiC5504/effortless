@@ -2349,36 +2349,16 @@ export function shortBranch(name: string, max = BRANCH_MAX): string {
 }
 
 /** What the chip says (the branch, then the details asked for: *3 for three uncommitted files, ↑ ↓ against the
- * upstream, the repository before the name), the hover's sentence, which always tells all, and the terminal's line,
- * which has no hover and so names the worktree itself. */
-export function gitChip(p: GitPlace, details: readonly BranchDetail[] = ['changes', 'sync']): { name: string; marks: string; tip: string; line: string } {
+ * upstream, the repository before the name), and the terminal's line, which has no mark for a worktree and so
+ * names it. */
+export function gitChip(p: GitPlace, details: readonly BranchDetail[] = ['changes', 'sync']): { name: string; marks: string; line: string } {
   const name = `${details.includes('repo') ? `${p.repo}:` : ''}${p.branch ? shortBranch(p.branch) : `@${p.commit || 'none'}`}`
   const marks = [
     details.includes('changes') && p.changed ? ` *${p.changed}` : '',
     details.includes('sync') && p.ahead ? ` ↑${p.ahead}` : '',
     details.includes('sync') && p.behind ? ` ↓${p.behind}` : '',
   ].join('')
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
-  const sync = !p.upstream
-    ? p.branch ? 'no upstream' : ''
-    : p.gone
-      ? `upstream ${p.upstream} is gone`
-      : p.ahead && p.behind
-        ? `${p.ahead} ahead and ${p.behind} behind ${p.upstream}`
-        : p.ahead
-          ? `${p.ahead} ahead of ${p.upstream}`
-          : p.behind
-            ? `${p.behind} behind ${p.upstream}`
-            : `up to date with ${p.upstream}`
-  const tip = [
-    p.branch ? `Branch ${p.branch}` : `Detached at ${p.commit || 'no commit'}`,
-    p.worktree ? `worktree ${p.worktree} of ${p.repo}${p.mainBranch ? `, main checkout on ${p.mainBranch}` : ''}` : p.repo,
-    p.changed ? `${plural(p.changed, 'file')} uncommitted` : 'nothing to commit',
-    sync,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-  return { name, marks, tip, line: `⎇ ${name}${marks}${p.worktree ? ` · worktree of ${p.repo}` : ''}` }
+  return { name, marks, line: `⎇ ${name}${marks}${p.worktree ? ` · worktree of ${p.repo}` : ''}` }
 }
 
 /** The branch mark: a line with a branch off it. A linked worktree draws the branch's end as a square, its own copy. */
@@ -2444,9 +2424,12 @@ async function refreshGit($: EngineInterface) {
   }
 }
 
-// The newest GitHub Actions run on the chat's branch, after the branch chip: while it runs, the step it is on and how
-// far through its job; once done, a tick or a cross. Asked of gh, the person's own GitHub CLI and login.
-const ciRun = atom({ plugin: 'effortless', key: 'ciRun' } as const, null)
+// The GitHub Actions runs on the chat's branch: those still going on a line of their own under the dashboard, each with
+// the step it is on and how far through its job; once none is, the newest's tick or cross after the branch chip. Asked
+// of gh, the person's own GitHub CLI and login.
+const ciRuns = atom({ plugin: 'effortless', key: 'ciRuns' } as const, null)
+// Runs going at once that get their own place, with their jobs read; the rest are counted.
+const CI_SHOWN = 2
 // gh calls GitHub's API: often while a run goes, seldom while nothing does, rarely where gh or a GitHub remote is
 // missing (the answer would not change). Right after a push the new run takes a few seconds to appear, so for a
 // while after one it is asked as often as during a run.
@@ -2460,14 +2443,10 @@ let ciNextAt = 0
 let ciFastUntil = 0
 let ciError = ''
 
+type CiState = { runs: CiRun[]; more: number }
 type GhRun = { databaseId: number; status: string; conclusion: string | null; workflowName: string; displayTitle: string; url: string; createdAt: string }
 type GhStep = { name: string; status: string; conclusion: string | null }
 type GhJob = { name: string; status: string; conclusion: string | null; steps?: GhStep[] }
-
-/** The run to show from `gh run list` (newest first): one still going before any finished one. */
-export function pickRun(runs: readonly GhRun[]): GhRun | undefined {
-  return runs.find(r => r.status !== 'completed') ?? runs[0]
-}
 
 /** A run and its jobs from `gh run view --json jobs`, cut to what the chip says: the job running now (or the first that
  * failed), its step, and how far through its steps it is. */
@@ -2493,6 +2472,11 @@ export function ciFrom(run: GhRun, jobs: readonly GhJob[]): CiRun {
   }
 }
 
+/** owner/name of a GitHub remote's URL (https or ssh), or null for a remote elsewhere. */
+export function githubRepo(url: string): string | null {
+  return /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/.exec(url.trim())?.slice(1, 3).join('/') ?? null
+}
+
 export type CiTone = 'running' | 'queued' | 'success' | 'failure' | 'other'
 export function ciTone(c: CiRun): CiTone {
   if (c.status === 'queued' || c.status === 'waiting' || c.status === 'pending' || c.status === 'requested') return 'queued'
@@ -2504,33 +2488,19 @@ export function ciTone(c: CiRun): CiTone {
 
 const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
 
-/** What the chip says (the workflow, then the step and n/m while it runs, or the step that failed), the hover's
- * sentence, and the terminal's words, which have no icon and so carry a mark. */
-export function ciChip(c: CiRun, now: number): { label: string; tip: string; line: string } {
+/** What a run says: the workflow and n/m of its job's steps while it runs, then the job (when the run has several) and
+ * the step it is on; the step that failed; or the workflow alone once it passed. The desktop cuts the label to the room
+ * it has; the terminal's line cuts the step itself. */
+export function ciChip(c: CiRun): { label: string; line: string } {
   const tone = ciTone(c)
-  const count = c.total ? ` ${c.done}/${c.total}` : ''
-  const label =
-    tone === 'running' ? `${c.workflow}${c.step ? ` · ${cut(c.step, STEP_MAX)}` : ''}${count}`
+  const where = (step: string) => `${c.jobsTotal > 1 && c.job ? `${c.job}: ` : ''}${step}`
+  const words = (step: (s: string) => string) =>
+    tone === 'running' ? `${c.workflow}${c.total ? ` ${c.done}/${c.total}` : ''}${c.step ? ` · ${where(step(c.step))}` : ''}`
     : tone === 'queued' ? `${c.workflow} · queued`
-    : tone === 'failure' && c.step ? `${c.workflow} · ${cut(c.step, STEP_MAX)}`
+    : tone === 'failure' && c.step ? `${c.workflow} · ${where(step(c.step))}`
     : c.workflow
-  const mins = Math.max(0, Math.round((now - Date.parse(c.createdAt)) / 60_000))
-  const ago = Number.isNaN(mins) ? '' : mins < 1 ? 'started just now' : mins < 60 ? `started ${mins}m ago` : `started ${Math.round(mins / 60)}h ago`
-  const state =
-    tone === 'running' ? `running${c.job ? ` ${c.job}` : ''}${c.step ? `: ${c.step}, step ${c.done + 1} of ${c.total}` : ''}`
-    : tone === 'queued' ? 'queued'
-    : tone === 'failure' ? `failed${c.job ? ` in ${c.job}` : ''}${c.step ? `: ${c.step}` : ''}`
-    : c.conclusion ?? c.status
-  const tip = [
-    `${c.workflow} ${state}`,
-    c.jobsTotal > 1 ? `${c.jobsDone} of ${c.jobsTotal} jobs done` : '',
-    `"${cut(c.title, 60)}"`,
-    ago,
-  ]
-    .filter(Boolean)
-    .join(' · ')
   const mark = { running: '▶', queued: '◷', success: '✓', failure: '✗', other: '⊘' }[tone]
-  return { label, tip, line: `${mark} ${label}` }
+  return { label: words(step => step), line: `${mark} ${words(step => cut(step, STEP_MAX))}` }
 }
 
 /** The run's mark: a ring that fills with the job's steps while it runs, a tick, a cross, a hollow ring while queued. */
@@ -2562,34 +2532,50 @@ async function ciAfter($: EngineInterface, tool: string, input: unknown) {
   }
 }
 
-async function readCi($: EngineInterface, branch: string): Promise<CiRun | null> {
+async function readCi($: EngineInterface, place: GitPlace): Promise<CiState | null> {
+  const branch = place.branch
+  if (!branch) return null
   const cwd = await $.session.cwd().catch(() => undefined)
-  const gh = (args: string[]) => $.process.run(['gh', ...args], { ...(cwd ? { cwd } : {}), timeoutMs: 15_000 })
-  const list = await gh(['run', 'list', '--branch', branch, '--limit', '5', '--json', 'databaseId,status,conclusion,workflowName,displayTitle,url,createdAt'])
+  const at = cwd ? { cwd } : {}
+  // The repository the branch pushes to: the remote its upstream is on, else origin. Left to itself gh picks its own
+  // default, which in a fork with an upstream remote is the original's repository, not the fork the runs are on.
+  const remote = place.upstream?.split('/')[0] || 'origin'
+  const url = await $.process.run(['git', 'remote', 'get-url', remote], { ...at, timeoutMs: GIT_TIMEOUT_MS })
+  const repo = url.exitCode === 0 ? githubRepo(url.stdout) : null
+  if (!repo) throw new Error(`${remote} is not a GitHub remote`)
+  const gh = (args: string[]) => $.process.run(['gh', ...args, '-R', repo], { ...at, timeoutMs: 15_000 })
+  const list = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,status,conclusion,workflowName,displayTitle,url,createdAt'])
   if (list.exitCode !== 0) throw new Error(list.stderr.trim().split(/\r?\n/)[0]?.slice(0, 120) || `gh exited ${list.exitCode}`)
-  const run = pickRun(JSON.parse(list.stdout || '[]') as GhRun[])
-  if (!run) return null
-  // A finished run that passed needs no jobs; a failed one is read once more for the step that failed.
-  const was = await read($, ciRun)
-  if (run.status === 'completed' && (run.conclusion === 'success' || (was?.id === run.databaseId && was.status === 'completed')))
-    return was?.id === run.databaseId && was.status === 'completed' ? was : ciFrom(run, [])
-  const view = await gh(['run', 'view', String(run.databaseId), '--json', 'jobs'])
-  const jobs = view.exitCode === 0 ? ((JSON.parse(view.stdout || '{}') as { jobs?: GhJob[] }).jobs ?? []) : []
-  return ciFrom(run, jobs)
+  const runs = JSON.parse(list.stdout || '[]') as GhRun[]
+  const jobsOf = async (run: GhRun) => {
+    const view = await gh(['run', 'view', String(run.databaseId), '--json', 'jobs'])
+    return view.exitCode === 0 ? ((JSON.parse(view.stdout || '{}') as { jobs?: GhJob[] }).jobs ?? []) : []
+  }
+  const going = runs.filter(r => r.status !== 'completed')
+  if (going.length) {
+    const shown = going.slice(0, CI_SHOWN)
+    return { runs: await Promise.all(shown.map(async r => ciFrom(r, await jobsOf(r)))), more: going.length - shown.length }
+  }
+  const last = runs[0]
+  if (!last) return null
+  // A finished run that passed needs no jobs; a failed one is read once for the step that failed, then kept.
+  const kept = (await read($, ciRuns))?.runs[0]
+  if (kept && kept.id === last.databaseId && kept.status === 'completed') return { runs: [kept], more: 0 }
+  return { runs: [ciFrom(last, last.conclusion === 'success' ? [] : await jobsOf(last))], more: 0 }
 }
 
 async function refreshCi($: EngineInterface) {
   if (config.hide.includes('actions') || ciBusy) return
-  const branch = (await read($, gitPlace))?.branch
+  const place = await read($, gitPlace)
   const now = await $.clock.now().catch(() => Date.now())
   ciBusy = true
   try {
-    const next = branch ? await readCi($, branch).then(r => ((ciError = ''), r)) : null
-    const running = next !== null && next.status !== 'completed'
+    const next = place ? await readCi($, place).then(r => ((ciError = ''), r)) : null
+    const running = Boolean(next?.runs.some(r => r.status !== 'completed'))
     ciNextAt = now + (running || now < ciFastUntil ? CI_RUNNING_MS : CI_IDLE_MS)
-    if (JSON.stringify(next) === JSON.stringify(await read($, ciRun))) return
+    if (JSON.stringify(next) === JSON.stringify(await read($, ciRuns))) return
     void proof($, `actions: ${JSON.stringify(next)}`)
-    await update($, ciRun, () => next)
+    await update($, ciRuns, () => next)
     $.ui.invalidate('ui.render')
   } catch (error) {
     // No gh, no login, no GitHub remote: nothing to show, and asking again soon would not change that. The last answer
@@ -3683,8 +3669,12 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   const ring = config.cacheStyle === 'ring' && cacheShown !== null ? cacheShare(cacheMs, CACHE_TTL[cacheTtl]) : null
   const place = config.hide.includes('branch') ? null : await read($, gitPlace)
   const chip = place ? gitChip(place, config.branchDetails) : null
-  const ci = config.hide.includes('actions') ? null : await read($, ciRun)
-  const ciNow = ci ? ciChip(ci, nowMs) : null
+  // Runs still going take a line of their own under the row; once none is, the newest's result sits after the branch.
+  const ciState = config.hide.includes('actions') ? null : await read($, ciRuns)
+  const ciGoing = ciState?.runs.filter(r => r.status !== 'completed') ?? []
+  const ci = ciGoing.length ? null : (ciState?.runs[0] ?? null)
+  const ciNow = ci ? ciChip(ci) : null
+  const ciMore = ciGoing.length ? (ciState?.more ?? 0) : 0
   const { head, what, rest, detail } = dashboardLines({
     auto: v.auto,
     paused: Boolean(v.pausedNow),
@@ -3696,7 +3686,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
     contextPercent: e.surface === 'terminal' && lastContext && lastContext.window ? lastContext.percent : null,
     // Desktop draws the branch as a chip after the cache; the terminal's first line is full, so it leads the second,
     // except while Haiku advises a handoff: that needs the line's room more.
-    branch: drawn || adviceNow ? null : [chip?.line, ciNow?.line].filter(Boolean).join(' · ') || null,
+    branch: drawn || adviceNow ? null : [chip?.line, ciNow?.line, ...ciGoing.map(r => ciChip(r).line), ciMore ? `+${ciMore}` : ''].filter(Boolean).join(' · ') || null,
     // A prompt on a cheaper model names it in the judge's line ("On Sonnet · Haiku: a small fix"), not beside the effort word.
     reason: adviceNow ? `Handoff would suit: ${adviceNow}` : config.hide.includes('reason') ? '' : reason,
     // The last reply's cost is left out of the bar: it was noise there. lastTurn still records it.
@@ -3810,9 +3800,10 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
         </Box>
       ) : null}
     </Box>)}
-    <Box key="dash" position="relative" flexGrow={1} flexDirection="row" alignItems="center" paddingX={1} overflow="hidden"
+    <Box key="dash" position="relative" flexGrow={1} flexDirection="column" paddingX={1} overflow="hidden"
       borderStyle="round" borderColor="#00000000">
       <Box position="absolute" top={0} left={0} />
+      <Box key="dash-row" flexDirection="row" alignItems="center">
       {/* One row: the effort word, the context ring, the cache, then the reason and the last reply, dim. The word never shrinks;
           when room runs out the reason goes first (it shrinks a hundred times faster), then the cache, and the row clips
           rather than run under the buttons. Siblings, not nested: a shrunk parent let the word spill under the ring. */}
@@ -3878,11 +3869,17 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
                 <Text color={DASH_DIM}>{`${chip.name}${chip.marks}`}</Text>
               </Box>
             ) : null}
-            {/* The Actions run, after the branch it ran on: its own width, wrapping away whole before the branch does. */}
+            {/* The finished run, after the branch it ran on, taking what room is left (as the reason does), its words cut at
+                the end: a failed step's name can be long. */}
             {ci && ciNow ? (
-              <Box key="dash-ci" flexShrink={0} flexDirection="row" gap={1} alignItems="center" marginLeft={cacheShown !== null || chip ? 2 : 0}>
-                <Svg source={ciSvg(ci, CI_COLORS[ciTone(ci)])} alt={`actions ${ciTone(ci)}`} width={14} height={14} />
-                <Text color={DASH_DIM}>{ciNow.label}</Text>
+              <Box key="dash-ci" width={0} flexGrow={1} flexShrink={1} minWidth={16} flexDirection="row" gap={1} alignItems="center"
+                marginLeft={cacheShown !== null || chip ? 2 : 0}>
+                <Box flexShrink={0}>
+                  <Svg source={ciSvg(ci, CI_COLORS[ciTone(ci)])} alt={`actions ${ciTone(ci)}`} width={14} height={14} />
+                </Box>
+                <Box flexShrink={1} minWidth={0}>
+                  <Text color={DASH_DIM} wrap="truncate">{ciNow.label}</Text>
+                </Box>
               </Box>
             ) : null}
             {detail ? (
@@ -3925,6 +3922,24 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           </Box>
         ) : null}
       </Box>
+      </Box>
+      {/* The runs still going, a line of their own while they last: each its ring, its count and the step it is on, cut
+          to share the line; the runs past the first few counted at its end. */}
+      {Svg && ciGoing.length ? (
+        <Box key="dash-runs" flexDirection="row" alignItems="center" gap={3} overflow="hidden">
+          {ciGoing.map(r => (
+            <Box key={`dash-run-${r.id}`} flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={12}>
+              <Box flexShrink={0}>
+                <Svg source={ciSvg(r, CI_COLORS[ciTone(r)])} alt={`actions ${ciTone(r)}`} width={14} height={14} />
+              </Box>
+              <Box flexShrink={1} minWidth={0}>
+                <Text color={DASH_DIM} wrap="truncate">{ciChip(r).label}</Text>
+              </Box>
+            </Box>
+          ))}
+          {ciMore ? <Box flexShrink={0}><Text color={DASH_TEXT}>{`+${ciMore} more`}</Text></Box> : null}
+        </Box>
+      ) : null}
     </Box>
     </Box>
   )
@@ -4436,7 +4451,7 @@ export const register: Register = (on, options) => {
           `hidden: ${config.hide.join(',') || 'nothing'}`,
           `git: ${JSON.stringify(await read($, gitPlace))}, read ${ago(gitReadAt)}${gitError ? `, ${gitError}` : ''}`,
           `git now: ${JSON.stringify(await readGit($).catch((error: unknown) => String(error).slice(0, 120)))}`,
-          `actions: ${JSON.stringify(await read($, ciRun))}${ciError ? `, ${ciError}` : ''}, next ask in ${Math.max(0, Math.round((ciNextAt - Date.now()) / 1000))}s`,
+          `actions: ${JSON.stringify(await read($, ciRuns))}${ciError ? `, ${ciError}` : ''}, next ask in ${Math.max(0, Math.round((ciNextAt - Date.now()) / 1000))}s`,
           `model: ${config.modelAuto === 'on' ? `cheaper when it can, now ${routed ?? 'the chat\'s'}` : 'always the chat\'s'}`,
           lastRequest
             ? `last request: app asked ${lastRequest.appModel} at ${lastRequest.appEffort ?? 'none'}, sent ${lastRequest.model} at ${lastRequest.effort ?? 'none'}${lastRequest.model === lastRequest.appModel && lastRequest.effort === lastRequest.appEffort ? ' (unchanged)' : ' (changed by effortless)'}, ${ago(lastRequest.at)}`
@@ -4733,7 +4748,8 @@ Saved to ${out}.md and .json` }
     const effortNow = effortOf(v, v.modelNow ?? 'sonnet')
     const place = config.hide.includes('branch') ? null : await read($, gitPlace)
     const chip = place ? gitChip(place, config.branchDetails) : null
-    const ci = config.hide.includes('actions') ? null : await read($, ciRun)
+    const ciState = config.hide.includes('actions') ? null : await read($, ciRuns)
+    const ci = ciState?.runs[0] ?? null
     const cacheWords = v.cacheNow === null ? ''
       : config.cacheStyle === 'ring' ? `${cacheGlyph(cacheShare(cacheExpires - (await $.clock.now()), CACHE_TTL[cacheTtl]))} cache`
       : cacheLabel(v.cacheNow)
@@ -4819,7 +4835,7 @@ Saved to ${out}.md and .json` }
           <Text dimColor hover={{ scope: 'cache', backgroundColor: HOVER_BOX }}>{cacheWords}</Text>
         )}
         {chip ? <Text dimColor>{chip.line}</Text> : null}
-        {ci ? <Text color={CI_COLORS[ciTone(ci)]}>{ciChip(ci, await $.clock.now()).line}</Text> : null}
+        {ci ? <Text color={CI_COLORS[ciTone(ci)]}>{ciChip(ci).line}</Text> : null}
       </Box>
     )
   })

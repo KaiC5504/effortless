@@ -266,8 +266,9 @@ declare module 'claude-code' {
       agentsModule: string | null
       /** The git branch the chat runs on, and its worktree; null outside a repository. */
       gitPlace: GitPlace | null
-      /** The newest Actions run on the branch; null when there is none, or no gh to ask. */
-      ciRun: CiRun | null
+      /** The Actions runs on the branch still going (the first few, the rest counted in `more`), or else the newest one
+       *  that finished; null when there is none, or no gh to ask. */
+      ciRuns: { runs: CiRun[]; more: number } | null
     }
   }
 }

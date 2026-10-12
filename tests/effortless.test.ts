@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph, pickRun, ciFrom, ciChip, ciTone, ciSvg } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph, ciFrom, ciChip, ciTone, ciSvg, githubRepo } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -3976,28 +3976,22 @@ describe('git branch', () => {
     expect(gitPlaceFrom('--path-format=absolute\n/r/x\n.git\n.git\n', MAIN!.status, null)).toBeNull()
   })
 
-  test('gitChip: the branch, then the details asked for, a long name cut in the middle, the hover and the terminal line', () => {
+  test('gitChip: the branch, then the details asked for, a long name cut in the middle, and the terminal line', () => {
     const place = gitPlaceFrom(MAIN!.where, MAIN!.status, null)!
     const main = gitChip(place)
     expect(`${main.name}${main.marks}`).toBe('main *2 ↑2')
-    expect(main.tip).toBe('Branch main · effortless · 2 files uncommitted · 2 ahead of origin/main')
     expect(main.line).toBe('⎇ main *2 ↑2')
-    expect(gitChip({ ...place, behind: 3 }).tip).toContain('2 ahead and 3 behind origin/main')
-    expect(gitChip({ ...place, gone: true, ahead: 0 }).tip).toContain('upstream origin/main is gone')
     // Only what is switched on shows; the hover always tells all.
     const bare = gitChip({ ...place, behind: 1 }, [])
     expect(`${bare.name}${bare.marks}`).toBe('main')
-    expect(bare.tip).toContain('2 files uncommitted')
     expect(`${gitChip(place, ['changes']).name}${gitChip(place, ['changes']).marks}`).toBe('main *2')
     expect(`${gitChip({ ...place, behind: 1 }, ['sync']).marks}`).toBe(' ↑2 ↓1')
     expect(gitChip(place, ['repo']).name).toBe('effortless:main')
     const wt = gitChip(gitPlaceFrom(WORKTREE!.where, WORKTREE!.status, WORKTREE!.worktrees!)!)
     expect(`${wt.name}${wt.marks}`).toBe('claude/brave-otter')
-    expect(wt.tip).toBe('Branch claude/brave-otter · worktree brave-otter of effortless, main checkout on main · nothing to commit · no upstream')
     expect(wt.line).toBe('⎇ claude/brave-otter · worktree of effortless')
     const detached = gitChip({ ...gitPlaceFrom(MAIN!.where, '# branch.oid 0123456789\n# branch.head (detached)\n', null)!, changed: 1 })
     expect(detached.name).toBe('@0123456')
-    expect(detached.tip).toBe('Detached at 0123456 · effortless · 1 file uncommitted')
     expect(shortBranch('claude/competent-feistel-c1efc9')).toBe('claude/competent-feistel-c1efc9')
     const cut = shortBranch('feature/a-very-long-branch-name-that-keeps-going-1234')
     expect(cut).toHaveLength(32)
@@ -4030,7 +4024,7 @@ describe('git branch', () => {
     expect(dashboardLines({ auto: true, paused: false, judging: false, effort: 'low', cacheNow: 42, cacheGlyph: '◕', contextPercent: null, reason: '', last: null }).rest).toBe(' · ◕ cache')
   })
 
-  test('desktop: the chip sits after the cache, a worktree marked in the accent, and its hover says whose worktree it is', DASH, async ($, on) => {
+  test('desktop: the chip sits after the cache, and a worktree marked in the accent', DASH, async ($, on) => {
     engine(on)
     const mocked = mock.clock(on)
     gitSays(on, WORKTREE)
@@ -4173,29 +4167,28 @@ describe('git branch', () => {
     })),
   })
 
-  test('Actions: the run still going is picked, its job and step read, and the chip says step n/m', () => {
-    const done = { ...RUN, databaseId: 6, status: 'completed', conclusion: 'success' }
-    expect(pickRun([done, RUN])?.databaseId).toBe(7)
-    expect(pickRun([done])?.databaseId).toBe(6)
-    expect(pickRun([])).toBeUndefined()
-    const now = Date.parse('2026-10-13T10:03:00Z')
+  test('Actions: a run read to its job and step, the chip says n/m first, and a fork asks its own repository', () => {
     const running = ciFrom(RUN, [{ name: 'lint', status: 'completed', conclusion: 'success', steps: [] }, jobAt(4)])
     expect(running).toMatchObject({ job: 'test', step: 'Run tests', done: 4, total: 6, jobsDone: 1, jobsTotal: 2 })
     expect(ciTone(running)).toBe('running')
-    const chip = ciChip(running, now)
-    expect(chip.label).toBe('CI · Run tests 4/6')
-    expect(chip.line).toBe('▶ CI · Run tests 4/6')
-    expect(chip.tip).toBe('CI running test: Run tests, step 5 of 6 · 1 of 2 jobs done · "Add the ring" · started 3m ago')
+    // Two jobs: the one running is named before its step.
+    expect(ciChip(running)).toEqual({ label: 'CI 4/6 · test: Run tests', line: '▶ CI 4/6 · test: Run tests' })
+    const single = ciFrom(RUN, [jobAt(4)])
+    expect(ciChip(single).label).toBe('CI 4/6 · Run tests')
     const failed = ciFrom({ ...RUN, status: 'completed', conclusion: 'failure' }, [jobAt(3, 3)])
-    expect(ciChip(failed, now).label).toBe('CI · Build')
-    expect(ciChip(failed, now).line).toBe('✗ CI · Build')
-    expect(ciChip(failed, now).tip).toContain('CI failed in test: Build')
+    expect(ciChip(failed)).toEqual({ label: 'CI · Build', line: '✗ CI · Build' })
     const passed = ciFrom({ ...RUN, status: 'completed', conclusion: 'success' }, [])
-    expect([ciChip(passed, now).label, ciTone(passed)]).toEqual(['CI', 'success'])
-    expect(ciChip(ciFrom({ ...RUN, status: 'queued' }, []), now).label).toBe('CI · queued')
-    expect(ciChip({ ...running, step: 'A step with a very long name that goes on' }, now).label).toBe('CI · A step with a very long… 4/6')
+    expect([ciChip(passed).label, ciTone(passed)]).toEqual(['CI', 'success'])
+    expect(ciChip(ciFrom({ ...RUN, status: 'queued' }, [])).label).toBe('CI · queued')
+    // The desktop cuts a long step to its room; the terminal's line cuts it itself.
+    const long = { ...single, step: 'Post Run subosito/flutter-action@v2.16.0' }
+    expect(ciChip(long).label).toBe('CI 4/6 · Post Run subosito/flutter-action@v2.16.0')
+    expect(ciChip(long).line).toBe('▶ CI 4/6 · Post Run subosito/flutt…')
     expect(ciSvg(running, '#e0a33a')).toContain('stroke-dasharray')
     expect(ciSvg(failed, '#e5534b')).toContain('M5 5 9 9')
+    expect(githubRepo('https://github.com/KaiC5504/Kazumi.git\n')).toBe('KaiC5504/Kazumi')
+    expect(githubRepo('git@github.com:KaiC5504/Kazumi.git')).toBe('KaiC5504/Kazumi')
+    expect(githubRepo('https://gitlab.com/o/r.git')).toBeNull()
   })
 
   /** git on main, and gh answering for the runs on it; a gh that fails stands for one not installed or logged in. */
@@ -4210,7 +4203,9 @@ describe('git branch', () => {
         return { value: { exitCode: 0, stdout, stderr: '' } } as never
       }
       if (e.argv[0] !== 'git') return { value: { exitCode: 1, stdout: '', stderr: '' } } as never
-      return { value: { exitCode: 0, stdout: e.argv.includes('rev-parse') ? MAIN!.where : e.argv.includes('status') ? MAIN!.status : '', stderr: '' } } as never
+      // origin is the fork the runs are on; gh's own default would be the original's.
+      const url = e.argv.includes('get-url') ? (e.argv.includes('origin') ? 'https://github.com/KaiC5504/Kazumi.git\n' : 'https://github.com/Predidit/Kazumi.git\n') : ''
+      return { value: { exitCode: 0, stdout: url || (e.argv.includes('rev-parse') ? MAIN!.where : e.argv.includes('status') ? MAIN!.status : ''), stderr: '' } } as never
     })
     return { ran, set: (r: unknown[] | 'broken', j: unknown[] = []) => { now.runs = r; now.jobs = j } }
   }
@@ -4223,22 +4218,43 @@ describe('git branch', () => {
     await closeSetup($, DESK_BAND)
     await mocked.advance(16_000)
     let band = await $.ui.mount(DESK_BAND)
-    expect(await band.find({ key: 'dash-ci' })).toBeDefined()
-    expect(await band.find({ key: 'dash-ci-tip' })).toBeUndefined()
-    expect(await drawn(band)).toContain('"children":["CI · Install 2/6"]')
-    expect(gh.ran.some(c => c.startsWith('gh run list --branch main'))).toBe(true)
+    // Going: a line of its own under the row, no result chip in the row.
+    expect(await band.find({ key: 'dash-runs' })).toBeDefined()
+    expect(await band.find({ key: 'dash-ci' })).toBeUndefined()
+    expect(await drawn(band)).toContain('"children":["CI 2/6 · Install"]')
+    expect(gh.ran.some(c => c.startsWith('gh run list --branch main') && c.endsWith('-R KaiC5504/Kazumi'))).toBe(true)
     await band.unmount()
     // While it runs it is asked every 10 s.
     gh.set([RUN], [jobAt(4)])
     await mocked.advance(11_000)
     band = await $.ui.mount(DESK_BAND)
-    expect(await drawn(band)).toContain('"children":["CI · Run tests 4/6"]')
+    expect(await drawn(band)).toContain('"children":["CI 4/6 · Run tests"]')
     await band.unmount()
     gh.set([{ ...RUN, status: 'completed', conclusion: 'success' }])
     await mocked.advance(11_000)
     band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-runs' })).toBeUndefined()
+    expect(await band.find({ key: 'dash-ci' })).toBeDefined()
     expect(await drawn(band)).toContain('"children":["CI"]')
     expect(await drawn(band)).toContain('"alt":"actions success"')
+    await band.unmount()
+  })
+
+  test('several runs going: the first two each get their place on the line under the row, the rest are counted', DASH, async ($, on) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    const runs = [RUN, { ...RUN, databaseId: 8, workflowName: 'TestFlight' }, { ...RUN, databaseId: 9, workflowName: 'Lint' }, { ...RUN, databaseId: 5, status: 'completed', conclusion: 'success' }]
+    ghSays(on, runs, [jobAt(3)])
+    await start($, on)
+    await closeSetup($, DESK_BAND)
+    await mocked.advance(16_000)
+    const band = await $.ui.mount(DESK_BAND)
+    expect(await band.find({ key: 'dash-run-7' })).toBeDefined()
+    expect(await band.find({ key: 'dash-run-8' })).toBeDefined()
+    expect(await band.find({ key: 'dash-run-9' })).toBeUndefined()
+    const text = await drawn(band)
+    expect(text).toContain('"children":["TestFlight 3/6 · Build"]')
+    expect(text).toContain('"children":["+1 more"]')
     await band.unmount()
   })
 
@@ -4250,7 +4266,7 @@ describe('git branch', () => {
     await closeSetup($, TERM_BAND)
     await mocked.advance(16_000)
     const band = await $.ui.mount(TERM_BAND)
-    expect(await drawn(band)).toContain('⎇ main *2 ↑2 · ▶ CI · Run tests 4/6')
+    expect(await drawn(band)).toContain('⎇ main *2 ↑2 · ▶ CI 4/6 · Run tests')
     await band.unmount()
   })
 

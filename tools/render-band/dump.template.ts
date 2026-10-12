@@ -88,16 +88,18 @@ describe('render rig', () => {
         const where = `${top}\n${linked ? 'C:/code/app/.git/worktrees/brave-otter' : 'C:/code/app/.git'}\nC:/code/app/.git\n`
         const status = `# branch.oid 141b1eb\n# branch.head ${branch}\n# branch.upstream origin/${branch}\n# branch.ab +2 -0\n? notes.txt\n`
         const worktrees = `worktree C:/code/app\nHEAD 141b1eb\nbranch refs/heads/main\n\nworktree ${top}\nHEAD 141b1eb\nbranch refs/heads/${branch}\n`
-        const steps = ['Set up job', 'Checkout', 'Setup Node', 'Install', 'Lint', 'Build', 'Run tests', 'Upload coverage', 'Post Checkout', 'Complete job']
+        // Running is a release with two jobs and a long step name, and a second workflow going too (the chip counts it).
+        const steps = ['Set up job', 'Checkout', 'Setup Node', 'Install', 'Lint', 'Build', 'Post Run subosito/flutter-action@v2.16.0', 'Upload coverage', 'Post Checkout', 'Complete job']
         const at = P.ci === 'running' ? 6 : P.ci === 'failure' ? 5 : 10
         const runs = JSON.stringify([{ databaseId: 1, status: P.ci === 'running' ? 'in_progress' : 'completed', conclusion: P.ci === 'running' ? null : P.ci,
-          workflowName: 'CI', displayTitle: 'Show the git branch beside the cache', url: 'https://github.com/o/r/actions/runs/1', createdAt: new Date(Date.now() - 3 * 60_000).toISOString() }])
-        const jobs = JSON.stringify({ jobs: [{ name: 'test', status: P.ci === 'running' ? 'in_progress' : 'completed', conclusion: P.ci === 'running' ? null : P.ci,
+          workflowName: P.ci === 'running' ? 'public-release' : 'CI', displayTitle: 'public-release 3.2.0 (draft)', url: 'https://github.com/o/r/actions/runs/1', createdAt: new Date(Date.now() - 3 * 60_000).toISOString() },
+          ...(P.ci === 'running' ? [{ databaseId: 2, status: 'in_progress', conclusion: null, workflowName: 'TestFlight', displayTitle: 'TestFlight upload', url: '', createdAt: new Date(Date.now() - 4 * 60_000).toISOString() }] : [])])
+        const jobs = JSON.stringify({ jobs: [...(P.ci === 'running' ? [{ name: 'android', status: 'completed', conclusion: 'success', steps: [] }] : []), { name: P.ci === 'running' ? 'windows' : 'test', status: P.ci === 'running' ? 'in_progress' : 'completed', conclusion: P.ci === 'running' ? null : P.ci,
           steps: steps.map((name, i) => ({ name, status: i < at ? 'completed' : i === at && P.ci === 'running' ? 'in_progress' : P.ci === 'running' ? 'queued' : 'completed',
             conclusion: i < at ? 'success' : i === at && P.ci === 'failure' ? 'failure' : P.ci === 'running' ? null : 'skipped' })) }] })
         const gh = e.argv[0] === 'gh' && P.ci ? (e.argv.includes('list') ? runs : e.argv.includes('view') ? jobs : '') : null
         if (e.argv[0] === 'gh' && gh === null) return { value: { exitCode: 1, stdout: '', stderr: 'no runs' } } as never
-        const stdout = gh ?? (e.argv.includes('rev-parse') ? where : e.argv.includes('status') ? status : e.argv.includes('worktree') ? worktrees : '')
+        const stdout = gh ?? (e.argv.includes('get-url') ? 'https://github.com/o/r.git' : e.argv.includes('rev-parse') ? where : e.argv.includes('status') ? status : e.argv.includes('worktree') ? worktrees : '')
         return { value: { exitCode: 0, stdout, stderr: '' } } as never
       })
     }
