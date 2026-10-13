@@ -3599,17 +3599,18 @@ const SLOT_PAD = 10.5 / 19
 
 /** A band's face, reaching over the padding of the app's slot to its edges. Sideways the band's root takes a negative
  * margin; the app drops a root's vertical margins and takes whole cells only for offsets, so the face is a layer a row
- * taller each way, the rest of that row taken up by spacers. It sits under the band's content, which keeps its height
- * and a clear border so the slot does not grow. */
+ * taller at the top, the rest of that row taken up by a spacer. Below, the fill hangs into the padding by a margin
+ * instead (vertical margins count half rows): the slot scrolls, and a layer a row past its bottom made it scroll by
+ * the difference. It sits under the
+ * band's content, which keeps its height and a clear border so the slot does not grow. */
 function slotFace(els: { Box: unknown }, key: string, children: unknown, bg: unknown = DASH_BG, edge: unknown = DASH_EDGE) {
   const { Box: B } = els as unknown as { Box: (p: Record<string, unknown>) => unknown }
   return (
-    <B key={key} position="absolute" top={-1} bottom={-1} left={0} right={0} flexDirection="column">
+    <B key={key} position="absolute" top={-1} bottom={0} left={0} right={0} flexDirection="column">
       <B height={1 - SLOT_PAD} flexShrink={0} />
-      <B key={`${key}-fill`} position="relative" flexGrow={1} overflow="hidden" backgroundColor={bg} borderStyle="round" borderColor={edge}>
+      <B key={`${key}-fill`} position="relative" flexGrow={1} marginBottom={-2 * SLOT_PAD} overflow="hidden" backgroundColor={bg} borderStyle="round" borderColor={edge}>
         {children}
       </B>
-      <B height={1 - SLOT_PAD} flexShrink={0} />
     </B>
   )
 }
