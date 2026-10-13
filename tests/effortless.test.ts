@@ -1,7 +1,7 @@
 import { describe, expect, mock, test as baseTest } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
-import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph, ciFrom, ciChip, ciTone, ciSvg, githubRepo } from '../hooks/register'
+import { helperFloor, namedEffort, hotVisible, looksLikeRedo, REDO_STAY_PROMPTS, routeWorth, syncPlan, tipped, bounded, handoffEvidence, parseHandoffAnswer, withJevKey, parseVerdict, capped, resetLabel, HANDOFF_PROMPT, handoffMessage, withAttachments, endsOnQuestion, keepsEffort, benchGrade, benchReport, judgeFailure, contextFrom, readConfig, asSpent, cacheColor, cacheLabel, cacheClock, cacheSafe, cacheTtlOf, mostlyCached, isFollowUp, parseJevAnswer, parseJevKey, savedText, forkOutcome, setupNext, setupBack, setupCounter, dashboardLines, flashColor, handoffGlowStep, weighted, handoffLook, isNewer, latestRelease, updateSnoozed, updateFailure, claudeCandidates, noClaudeHint, compactTranscript, judgeGlowSvg, judgeGlowAt, judgeBrightnessAt, JUDGE_RISE_MS, JUDGE_FADE_MS, JUDGE_STEP_MS, JUDGE_PIECE_MS, parseGitStatus, gitPlaceFrom, gitChip, shortBranch, cacheShare, cacheRingSvg, cacheGlyph, ciFrom, ciChip, ciTone, ciSvg, githubRepo, fiveHourColor, modelRingSvg } from '../hooks/register'
 import { ART_COLUMNS, artFrame, artPixel, MOVING } from '../hooks/art'
 import { isLight, lightHex, lightProps, setLight, setTheme, themedEls, themedSvg, tint, tintHex } from '../hooks/theme'
 import { importsOf, moduleLinks, moduleOf, relPath, withTouch } from '../hooks/agents'
@@ -785,6 +785,17 @@ describe('cache countdown', () => {
     expect(cacheColor(1)).toBe('#e5534b')
     expect(cacheColor(0)).toBe('#7cc4ff')
     expect(mostlyCached({ input_tokens: 90000, cache_read_input_tokens: 10 })).toBe(false)
+  })
+
+  test('the ring around the model word fills with the 5-hour window and warms toward the limit', () => {
+    expect(fiveHourColor(59)).not.toBe('#e0a33a')
+    expect(fiveHourColor(60)).toBe('#e0a33a')
+    expect(fiveHourColor(80)).toBe('#f08a3c')
+    const ring = modelRingSvg(64, '#e0a33a', 48)
+    expect(ring).toContain('width="48" height="24"')
+    expect(ring).toContain('stroke-dasharray="64.00 100"')
+    expect(modelRingSvg(0, '#e0a33a', 48)).not.toContain('stroke-dasharray')
+    expect(modelRingSvg(140, '#e0a33a', 48)).toContain('stroke-dasharray="100.00 100"')
   })
 
   test('nothing before the first response; then it counts down with no further response, turns amber, goes cold', async ($, on) => {

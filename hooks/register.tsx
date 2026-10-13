@@ -1466,6 +1466,10 @@ async function checkSwamp($: EngineInterface) {
   lastContext = { tokens, window: context.window ?? 0, percent }
   // The Handoff button turns white and glows harder with the context: redraw the band when it crosses a step.
   if (handoffGlowStep(percent) !== wasStep) $.ui.invalidate('ui.render')
+  const five = rateLimits?.find(l => l.kind === 'five_hour')?.percentUsed
+  const fiveNow = typeof five === 'number' && Number.isFinite(five) ? five : null
+  if ((fiveNow === null ? null : Math.round(fiveNow)) !== (lastFiveHour === null ? null : Math.round(lastFiveHour))) $.ui.invalidate('ui.render')
+  lastFiveHour = fiveNow
   await checkHot($, rateLimits ?? [])
   const over = percent >= config.swampAt
   const next = over ? tokens : null
@@ -2192,12 +2196,37 @@ async function choose($: EngineInterface, next: Pick | null) {
 /** Everything a redraw needs, read together: the reads go out at once instead of one after the other. */
 // The context figures from the last usage check, for the cache tooltip.
 let lastContext: { tokens: number; window: number; percent: number } | null = null
+// The 5-hour window's use from the last usage check; null while the app reports none (an API key has no such limit).
+let lastFiveHour: number | null = null
 
 /** A small ring filled to `percent`, for the context in the swamp band. */
 export function ringSvg(percent: number, color: string): string {
   const p = Math.max(0, Math.min(100, percent))
   const c = 2 * Math.PI * 6
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="${color}" stroke-opacity=".25" stroke-width="2.2"/><circle cx="8" cy="8" r="6" fill="none" stroke="${color}" stroke-width="2.2" stroke-linecap="round" stroke-dasharray="${((c * p) / 100).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`
+}
+
+// The model word's measured width in the band's font (13px anthropic-sans, render rig), to size its ring.
+export const MODEL_WORD_W: Record<ModelKey, number> = { haiku: 35, sonnet: 43, opus: 33, fable: 33 }
+export const MODEL_RING_PAD = 7.5
+export const MODEL_RING_H = 23
+
+/** A pill around the model word, filled clockwise from the top to `percent`: the 5-hour window's use. */
+export function modelRingSvg(percent: number, color: string, w: number, h = MODEL_RING_H): string {
+  const p = Math.max(0, Math.min(100, percent))
+  const sw = 2.2
+  const i = sw / 2
+  const r = (h - sw) / 2
+  const f = (n: number) => n.toFixed(2)
+  const d = `M${f(w / 2)} ${f(i)}H${f(w - i - r)}A${f(r)} ${f(r)} 0 0 1 ${f(w - i - r)} ${f(h - i)}H${f(i + r)}A${f(r)} ${f(r)} 0 0 1 ${f(i + r)} ${f(i)}Z`
+  const arc = p > 0 ? `<path d="${d}" pathLength="100" fill="none" stroke="${color}" stroke-width="${sw}" stroke-linecap="round" stroke-dasharray="${f(p)} 100"/>` : ''
+  // A pixel of empty canvas above, so the pill centred on the line reaches one pixel lower: room for the p's descender.
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h + 1}" viewBox="0 -1 ${w} ${h + 1}"><path d="${d}" fill="none" stroke="${color}" stroke-opacity=".22" stroke-width="${sw}"/>${arc}</svg>`
+}
+
+/** The ring's colour for the 5-hour window's use: the accent, yellow from 60%, the hot band's ember from HOT_PERCENT. */
+export function fiveHourColor(percent: number): string {
+  return percent >= HOT_PERCENT ? EMBER : percent >= 60 ? YELLOW : ACCENT
 }
 
 /** The dashboard's settings icon: an outlined cog of eight teeth, drawn rather than a glyph, since the gear character
@@ -3777,6 +3806,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
   glowReadAt = Date.now()
   const glowNow = (await $.clock.now().catch(() => nowMs)) + drawLead
   const glowSource = Svg ? judgeGlowAt(judgeStartedAt, judgeEndedAt, glowNow) : null
+  const model = MODELS.find(m => m.key === (routed ?? v.modelNow))
   if (glowSource && judgeEndedAt !== null) renderLog.push(`${new Date().toISOString()} ${loadedSession} glow: fade drawn at +${Math.round(glowNow - Math.max(judgeEndedAt, judgeStartedAt + JUDGE_RISE_MS))} ms, lead ${Math.round(drawLead)} ms, ${Math.round(glowNow - drawLead - nowMs)} ms after the draw began`)
   return (
     // The band fills the app's slot to its edges (see slotFace).
@@ -3807,8 +3837,10 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
       <Box position="absolute" top={0} left={0} />
       {/* One row: the effort word, the context ring, the cache, then the reason and the last reply, dim. The word never shrinks;
           when room runs out the reason goes first (it shrinks a hundred times faster), then the cache, and the row clips
-          rather than run under the buttons. Siblings, not nested: a shrunk parent let the word spill under the ring. */}
-      <Box key="dash-words" position="relative" flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+          rather than run under the buttons. Siblings, not nested: a shrunk parent let the word spill under the ring. The
+          padding, taken back by the margin, keeps the model's ring (taller than the line) out of that clip. */}
+      <Box key="dash-words" position="relative" flexDirection="row" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden"
+        paddingY={0.5} marginY={-0.5}>
         <Box flexShrink={0} flexDirection="row">
           {Svg ? (
             // The mark, as it is, where the ✦ stood; faded while Auto is off.
@@ -3820,8 +3852,22 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
               word looked cheap: another font, a late start and a jump back to the text. */}
           <Text key="dash-level" color={wordColor} bold>{v.judging && Svg ? 'Deciding' : what}</Text>
           {/* The model this prompt runs on, dim, after the effort: the judge's routing to a cheaper model shows as it happens. */}
-          {!v.judging && v.auto && MODELS.find(m => m.key === (routed ?? v.modelNow)) ? (
-            <Text key="dash-model" color={DASH_DIM}>{` · ${MODELS.find(m => m.key === (routed ?? v.modelNow))!.label}`}</Text>
+          {!v.judging && v.auto && model ? (
+            Svg && lastFiveHour !== null ? (
+              <Box key="dash-model" flexShrink={0} flexDirection="row" alignItems="center">
+                <Text color={DASH_DIM}>{' · '}</Text>
+                {/* The ring lives in the word's own box, so it follows the word wherever the effort before it ends. */}
+                <Box key="dash-model-word" position="relative" flexShrink={0} paddingX={1} alignItems="center" justifyContent="center">
+                  <Box position="absolute" top={0} bottom={0} left={0} right={0} alignItems="center" justifyContent="center">
+                    <Svg source={modelRingSvg(lastFiveHour, fiveHourColor(lastFiveHour), MODEL_WORD_W[model.key] + MODEL_RING_PAD * 2)}
+                      alt={`${Math.round(lastFiveHour)}% of the 5-hour limit`} width={MODEL_WORD_W[model.key] + MODEL_RING_PAD * 2} height={MODEL_RING_H + 1} />
+                  </Box>
+                  <Text color={DASH_DIM}>{model.label}</Text>
+                </Box>
+              </Box>
+            ) : (
+              <Text key="dash-model" color={DASH_DIM}>{` · ${model.label}`}</Text>
+            )
           ) : null}
           {/* While the judge decides: the progress bar's thinking dots, as a plain image (its CSS still runs, and a
               redraw does not restart it the way an interactive frame does). */}

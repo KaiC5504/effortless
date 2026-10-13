@@ -34,6 +34,7 @@ if (flag('help')) {
 }
 const params = {
   percent: Number(opt('percent', '19')),
+  five: opt('five', null) === null ? undefined : Number(opt('five')),
   cacheMinutes: opt('cache', '59') === 'off' ? null : Number(opt('cache', '59')),
   effort: opt('effort', 'medium'),
   reason: opt('reason', 'a small fix in one file'),

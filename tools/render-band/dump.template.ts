@@ -6,6 +6,8 @@ import { describe, mock, test } from 'claude-code/testing'
 
 type Params = {
   percent: number
+  // --five N: the 5-hour window's use, ringed around the model word.
+  five?: number
   cacheMinutes: number | null
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   reason: string
@@ -104,7 +106,8 @@ describe('render rig', () => {
       })
     }
     const clock = mock.clock(on)
-    on('session.usage', () => ({ value: { context: { tokens: P.percent * 10_000, window: 1_000_000, percent: P.percent } } }) as never)
+    on('session.usage', () => ({ value: { context: { tokens: P.percent * 10_000, window: 1_000_000, percent: P.percent },
+      rateLimits: P.five === undefined ? [] : [{ kind: 'five_hour', percentUsed: P.five, resetsAt: new Date(Date.now() + 2 * 3600_000).toISOString() }] } }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
     on('command.register', () => ({ value: undefined }) as never)
     await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
