@@ -2425,7 +2425,7 @@ async function refreshGit($: EngineInterface) {
 }
 
 // The GitHub Actions run on the chat's branch, after the branch chip: the newest still going, with the step it is on, or
-// else the newest's tick or cross. Asked of gh, the person's own GitHub CLI and login.
+// else the newest's tick or cross for a few minutes after it ended. Asked of gh, the person's own GitHub CLI and login.
 const ciRuns = atom({ plugin: 'effortless', key: 'ciRuns' } as const, null)
 // Runs going at once that are read to their step: the newest. Two at once is rare, and the bar has room for one.
 const CI_SHOWN = 1
@@ -2437,13 +2437,17 @@ const CI_IDLE_MS = 60_000
 const CI_BROKEN_MS = 5 * 60_000
 const CI_AFTER_PUSH_MS = 2 * 60_000
 const STEP_MAX = 24
+// A finished run stays this long after it ended, then the chip goes: yesterday's tick says nothing about now.
+const CI_LINGER_MS = 3 * 60_000
 let ciBusy = false
 let ciNextAt = 0
 let ciFastUntil = 0
 let ciError = ''
+// When the finished run on show is to go, so it is asked again then rather than up to a minute later.
+let ciGoneAt = 0
 
 type CiState = { runs: CiRun[]; more: number }
-type GhRun = { databaseId: number; status: string; conclusion: string | null; workflowName: string; displayTitle: string; url: string; createdAt: string }
+type GhRun = { databaseId: number; status: string; conclusion: string | null; workflowName: string; displayTitle: string; url: string; createdAt: string; updatedAt?: string }
 type GhStep = { name: string; status: string; conclusion: string | null }
 type GhJob = { name: string; status: string; conclusion: string | null; steps?: GhStep[] }
 
@@ -2540,7 +2544,7 @@ async function readCi($: EngineInterface, place: GitPlace): Promise<CiState | nu
   const repo = url.exitCode === 0 ? githubRepo(url.stdout) : null
   if (!repo) throw new Error(`${remote} is not a GitHub remote`)
   const gh = (args: string[]) => $.process.run(['gh', ...args, '-R', repo], { ...at, timeoutMs: 15_000 })
-  const list = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,status,conclusion,workflowName,displayTitle,url,createdAt'])
+  const list = await gh(['run', 'list', '--branch', branch, '--limit', '10', '--json', 'databaseId,status,conclusion,workflowName,displayTitle,url,createdAt,updatedAt'])
   if (list.exitCode !== 0) throw new Error(list.stderr.trim().split(/\r?\n/)[0]?.slice(0, 120) || `gh exited ${list.exitCode}`)
   const runs = JSON.parse(list.stdout || '[]') as GhRun[]
   const jobsOf = async (run: GhRun) => {
@@ -2554,6 +2558,9 @@ async function readCi($: EngineInterface, place: GitPlace): Promise<CiState | nu
   }
   const last = runs[0]
   if (!last) return null
+  // A finished run's updatedAt is when it ended.
+  ciGoneAt = Date.parse(last.updatedAt ?? '') + CI_LINGER_MS
+  if (!(ciGoneAt > (await $.clock.now().catch(() => Date.now())))) return null
   // A finished run that passed needs no jobs; a failed one is read once for the step that failed, then kept.
   const kept = (await read($, ciRuns))?.runs[0]
   if (kept && kept.id === last.databaseId && kept.status === 'completed') return { runs: [kept], more: 0 }
@@ -2566,9 +2573,11 @@ async function refreshCi($: EngineInterface) {
   const now = await $.clock.now().catch(() => Date.now())
   ciBusy = true
   try {
+    ciGoneAt = 0
     const next = place ? await readCi($, place).then(r => ((ciError = ''), r)) : null
     const running = Boolean(next?.runs.some(r => r.status !== 'completed'))
     ciNextAt = now + (running || now < ciFastUntil ? CI_RUNNING_MS : CI_IDLE_MS)
+    if (next && ciGoneAt > now) ciNextAt = Math.min(ciNextAt, ciGoneAt)
     if (JSON.stringify(next) === JSON.stringify(await read($, ciRuns))) return
     void proof($, `actions: ${JSON.stringify(next)}`)
     await update($, ciRuns, () => next)
