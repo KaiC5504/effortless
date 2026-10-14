@@ -2532,6 +2532,7 @@ describe('settings panel', () => {
 describe('switching parts off', () => {
   test('readConfig keeps only parts that can be switched off; the judge-down alert is not among them', () => {
     expect(readConfig({ hide: 'swamp, handoff,bogus,down,progress' }).hide).toEqual(['swamp', 'handoff', 'progress'])
+    expect(readConfig({ hide: 'usage' }).hide).toEqual(['usage'])
   })
 
   test('a hidden handoff button is not in the footer; a switched-off context alert does not show', { options: { hide: 'handoff,swamp' } } as never, async ($, on) => {
@@ -4320,6 +4321,43 @@ describe('git branch', () => {
     expect(await band.find({ key: 'dash-ci' })).toBeUndefined()
     expect(await band.find({ key: 'dash-branch' })).toBeDefined()
     expect(gh.ran.filter(c => c.startsWith('gh '))).toEqual([])
+    await band.unmount()
+  })
+})
+
+describe('the 5-hour ring', () => {
+  const start = async ($: Engine, on: On) => {
+    on('session.start', (_$, e) => ({ cwd: e.cwd }) as never)
+    on('command.register', () => ({ value: undefined }) as never)
+    await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
+  }
+  const bandAt64 = async ($: Engine, on: On) => {
+    engine(on)
+    const mocked = mock.clock(on)
+    on('session.usage', () => ({ value: { context: { tokens: 1000, window: 200_000, percent: 1 }, rateLimits: [
+      { kind: 'five_hour', percentUsed: 64, resetsAt: '2026-10-06T14:20:00Z' },
+    ] } }) as never)
+    await start($, on)
+    const guide = await $.ui.mount(DESK_BAND)
+    await guide.press({ key: 'setup-close' })
+    await guide.unmount()
+    await mocked.advance(16_000)
+    return $.ui.mount(DESK_BAND)
+  }
+
+  test('the model word wears the ring, filled with the 5-hour window', { options: { layout: 'default' } } as never, async ($, on) => {
+    const band = await bandAt64($, on)
+    expect(await band.find({ key: 'dash-model-word' })).toBeDefined()
+    expect(await drawn(band)).toContain('64% of the 5-hour limit')
+    await band.unmount()
+  })
+
+  test('switched off in Customize, the model word shows plain', { options: { layout: 'default', hide: 'reason,usage' } } as never, async ($, on) => {
+    const band = await bandAt64($, on)
+    expect(await band.find({ key: 'dash-model-word' })).toBeUndefined()
+    const text = await drawn(band)
+    expect(text).toContain(' · Opus')
+    expect(text).not.toContain('of the 5-hour limit')
     await band.unmount()
   })
 })

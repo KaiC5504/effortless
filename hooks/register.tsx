@@ -638,7 +638,7 @@ export const SWAMP_STEPS = [10, 20, 30, 40, 50, 60, 70, 80] as const
 /** The parts of effortless a person can switch off: the footer's (setup) and the progress bar's (setup, settings).
  * The context (swamp), running-low (hot) and cold-cache alerts can be switched off for good in Customize; the judge-down
  * alert always shows. Each alert also has its own ✕. */
-export const HIDEABLE = ['handoff', 'timer', 'branch', 'actions', 'reason', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
+export const HIDEABLE = ['handoff', 'timer', 'branch', 'actions', 'reason', 'usage', 'progress', 'sounds', 'swamp', 'hot', 'cold'] as const
 export type Hideable = (typeof HIDEABLE)[number]
 // What the app passed to register, so settings kept in the store can be laid over it at session start.
 let pluginOptions: Record<string, unknown> = {}
@@ -3853,7 +3853,7 @@ async function dashboardBand($: EngineInterface, e: RenderInput<'AbovePrompt'>) 
           <Text key="dash-level" color={wordColor} bold>{v.judging && Svg ? 'Deciding' : what}</Text>
           {/* The model this prompt runs on, dim, after the effort: the judge's routing to a cheaper model shows as it happens. */}
           {!v.judging && v.auto && model ? (
-            Svg && lastFiveHour !== null ? (
+            Svg && lastFiveHour !== null && !config.hide.includes('usage') ? (
               <Box key="dash-model" flexShrink={0} flexDirection="row" alignItems="center">
                 <Text color={DASH_DIM}>{' · '}</Text>
                 {/* The ring lives in the word's own box, so it follows the word wherever the effort before it ends. */}
@@ -5164,6 +5164,7 @@ Saved to ${out}.md and .json` }
           {hidden.includes('branch') ? null : ([['changes', 'changes'], ['sync', 'ahead/behind'], ['repo', 'repo']] as const).map(detailBox)}
         </Box>,
         box(['actions', 'Actions']),
+        box(['usage', 'Usage ring']),
         box(['reason', 'Judge line']),
       ]
       // The alerts sit in the Handoff card, next to the share of context the context alert waits for.
