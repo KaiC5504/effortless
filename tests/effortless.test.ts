@@ -866,7 +866,7 @@ describe('cache countdown', () => {
 
   test('Compact appears only once the cache is cold, and a click compacts', async ($, on) => {
     engine(on)
-    on('session.usage', () => ({ value: { context: { tokens: 200_000, window: 1_000_000, percent: 20 } } }) as never)
+    on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as never)
     const mocked = mock.clock(on)
     answer(on, { ephemeral_1h_input_tokens: 500, ephemeral_5m_input_tokens: 0 })
     let compacted = 0
@@ -917,7 +917,7 @@ describe('cache countdown', () => {
 
   test('a compact that fails says why in a toast, nothing breaks', async ($, on) => {
     engine(on)
-    on('session.usage', () => ({ value: { context: { tokens: 200_000, window: 1_000_000, percent: 20 } } }) as never)
+    on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as never)
     const mocked = mock.clock(on)
     answer(on, { ephemeral_5m_input_tokens: 500 })
     on('command.run', (_$, e) => {
@@ -1969,7 +1969,7 @@ describe('handoff', () => {
     const filled: string[] = []
     on('prompt.fill', (_$, e) => {
       filled.push(e.text)
-      return { value: { isFilled: true, text: e.text } } as never
+      return { isFilled: true } as never
     })
     const mocked = mock.clock(on)
     await $.session.start({ cwd: '.', surface: 'desktop', isInteractive: true } as never)
@@ -3252,7 +3252,7 @@ describe('a chat opened again', () => {
 
   test('two hours after its last response: the cache shows cold at once', async ($, on) => {
     engine(on)
-    on('session.usage', () => ({ value: { context: { tokens: 200_000, window: 1_000_000, percent: 20 } } }) as never)
+    on('session.usage', () => ({ value: { context: { tokens: 500_000, window: 1_000_000, percent: 50 } } }) as never)
     mock.clock(on)
     await start($, on)
     await closeSetup($)
