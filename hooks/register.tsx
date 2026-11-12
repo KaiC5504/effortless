@@ -13,7 +13,7 @@ export const MODELS: { key: ModelKey; label: string; long: string; id: string }[
   { key: 'haiku', label: 'Haiku', long: 'Haiku 5.5', id: 'claude-haiku-5-5' },
   { key: 'sonnet', label: 'Sonnet', long: 'Sonnet 5.5', id: 'claude-sonnet-5-5' },
   { key: 'opus', label: 'Opus', long: 'Opus 5.5', id: 'claude-opus-5-5' },
-  { key: 'fable', label: 'Fable', long: 'Fable 5.1', id: 'claude-fable-5-1' },
+  { key: 'fable', label: 'Fable', long: 'Fable 5.2', id: 'claude-fable-5-2' },
 ]
 export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // What one token costs relative to an uncached input token, the same ratios on every Claude model. Measured over
@@ -21,8 +21,9 @@ export const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // mostly changes how many tool calls a prompt makes, not what one answer writes, so all four are counted.
 const WEIGHT = { input: 1, write: 1.25, read: 0.1, out: 5 }
 // Changing effort between two requests keeps the prompt cache on these models only. On Fable 5.1 and older Opus
-// the next request rewrote 56-100% of the cache (measured), which costs more than any effort can save.
-export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5/.test(modelId)
+// the next request rewrote 56-100% of the cache (measured), which costs more than any effort can save. Fable 5.2
+// keeps it like Opus 5.5 (measured: under 1% rewritten at medium -> high and high -> xhigh).
+export const cacheSafe = (modelId: string) => /(opus|sonnet)-5-5|fable-5-2/.test(modelId)
 // The accent the effort in the footer is written in: the brand violet, or Claude orange when the theme says so.
 let ACCENT = accent()
 /** Takes the theme the settings name; the accent and every drawing follow it. */
@@ -4797,7 +4798,7 @@ Saved to ${out}.md and .json` }
         {/* Hovering the level puts a box behind it, like the app's own effort pill. The spaces are its padding:
             Text has no padding of its own. */}
         {v.auto && v.pausedNow ? (
-          // Fable and older models: an effort change rewrites the cache there, so Auto waits.
+          // Fable 5.1 and older models: an effort change rewrites the cache there, so Auto waits.
           <Text dimColor hover={{ scope: 'effort', backgroundColor: HOVER_BOX }}>
             {' Paused '}
           </Text>
@@ -5693,7 +5694,7 @@ Saved to ${out}.md and .json` }
           ...nav(nextButton),
         ])
       }
-      return band('⏻ Auto on or off. ⚙ all settings. Auto pauses on Fable.', 24, [
+      return band('⏻ Auto on or off. ⚙ all settings. Auto pauses on Fable 5.1.', 24, [
         ...nav(<Button key="setup-done" variant="primary" autoFocus label="Done" onPress={() => finishSetup($)} />),
       ])
     }

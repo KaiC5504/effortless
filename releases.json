@@ -1,5 +1,10 @@
 [
   {
+    "version": "1.72.1",
+    "date": "2026-11-12",
+    "note": "Auto works on Fable 5.2: an effort change there keeps the prompt cache"
+  },
+  {
     "version": "1.72.0",
     "date": "2026-10-23",
     "note": "The cold-chat band fits the app's new frame, and waits for 400k tokens",

@@ -662,9 +662,11 @@ describe('footer text', () => {
 })
 
 describe('helpers', () => {
-  test('cacheSafe: effort may change on Opus 5.5 and Sonnet 5.5 only', () => {
+  test('cacheSafe: effort may change on Opus 5.5, Sonnet 5.5 and Fable 5.2 only', () => {
     expect(cacheSafe('claude-opus-5-5')).toBe(true)
     expect(cacheSafe('claude-sonnet-5-5[1m]')).toBe(true)
+    expect(cacheSafe('claude-fable-5-2')).toBe(true)
+    expect(cacheSafe('claude-fable-5-2[1m]')).toBe(true)
     expect(cacheSafe('claude-fable-5-1')).toBe(false)
     expect(cacheSafe('claude-opus-4-8')).toBe(false)
     expect(cacheSafe('claude-opus-5')).toBe(false)
@@ -945,7 +947,27 @@ describe('cache countdown', () => {
 })
 
 describe('cache guard', () => {
-  test('on Fable Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
+  test('on Fable 5.2 Auto judges and changes the effort, and the footer is not paused', async ($, on) => {
+    engine(on, {}, 'claude-fable-5-2')
+    const asked = judgeSays(on, '{"model":"fable","effort":"low","why":"x"}')
+    const sent: unknown[] = []
+    on('turn.step', async function* (_$, e) {
+      sent.push(e.effort)
+      return { turnId: e.turnId, index: 0, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+    })
+    const footer = await $.ui.mount(FOOTER)
+    await $.prompt.submit({ text: 'rename it', wait: false, origin: { kind: 'composer' } })
+    const stream = $.turn.step({ turnId: 't1', index: 0, model: 'claude-fable-5-2', effort: 'xhigh', messageCount: 1 })
+    for await (const _ of stream) {
+      // drain
+    }
+    expect(asked.length).toBeGreaterThan(0)
+    expect(sent).toEqual(['low'])
+    expect(await drawn(footer)).not.toContain('"children":[" Paused "]')
+    await footer.unmount()
+  })
+
+  test('on Fable 5.1 Auto neither judges nor changes the effort, and the footer says Paused', async ($, on) => {
     engine(on, {}, 'claude-fable-5-1')
     const asked = judgeSays(on, '{"model":"opus","effort":"low","why":"x"}')
     const sent: unknown[] = []
@@ -1402,7 +1424,7 @@ describe('setup guide', () => {
     await band.press({ key: 'setup-next' })
 
     // The last word: the footer's buttons and Fable; no step of ticks. Back goes to the look step.
-    expect(await drawn(band)).toContain('Auto pauses on Fable')
+    expect(await drawn(band)).toContain('Auto pauses on Fable 5.1')
     expect(await band.find({ key: 'setup-box-timer' })).toBeUndefined()
     await band.press({ key: 'setup-back' })
     expect(await drawn(band)).toContain('4/4')
